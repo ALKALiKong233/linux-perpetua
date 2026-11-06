@@ -994,6 +994,13 @@ static int ath12k_core_start(struct ath12k_base *ab)
 			ath12k_err(ab, "failed to send dbs mode: %d\n", ret);
 			goto err_reo_cleanup;
 		}
+		if (of_property_read_bool(ab->dev->of_node, "qcom,no-dbs")) {
+			ret = ath12k_wmi_disable_dbs(ab);
+			if (ret) {
+				ath12k_err(ab, "failed to disable dbs: %d\n", ret);
+				goto err_reo_cleanup;
+			}
+		}
 	}
 
 	ret = ath12k_dp_tx_htt_h2t_ver_req_msg(ab);

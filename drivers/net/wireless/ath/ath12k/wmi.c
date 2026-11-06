@@ -4420,6 +4420,35 @@ int ath12k_wmi_set_hw_mode(struct ath12k_base *ab,
 	return ret;
 }
 
+/* Runs the chip on one MAC: with DBS the firmware splits each scan
+ * between both MACs, and the 5 GHz channels it gives the 2.4 GHz MAC
+ * hear nothing on some boards.
+ */
+int ath12k_wmi_disable_dbs(struct ath12k_base *ab)
+{
+	struct ath12k_wmi_pdev_set_mac_config_cmd *cmd;
+	struct ath12k_wmi_base *wmi_ab = &ab->wmi_ab;
+	struct sk_buff *skb;
+	int ret;
+
+	skb = ath12k_wmi_alloc_skb(wmi_ab, sizeof(*cmd));
+	if (!skb)
+		return -ENOMEM;
+
+	cmd = (struct ath12k_wmi_pdev_set_mac_config_cmd *)skb->data;
+	cmd->tlv_header = ath12k_wmi_tlv_cmd_hdr(WMI_TAG_PDEV_SET_MAC_CONFIG_CMD,
+						 sizeof(*cmd));
+	cmd->pdev_id = WMI_PDEV_ID_SOC;
+
+	ret = ath12k_wmi_cmd_send(&wmi_ab->wmi[0], skb, WMI_PDEV_SET_MAC_CONFIG_CMDID);
+	if (ret) {
+		ath12k_warn(ab, "failed to send WMI_PDEV_SET_MAC_CONFIG_CMDID\n");
+		dev_kfree_skb(skb);
+	}
+
+	return ret;
+}
+
 int ath12k_wmi_cmd_init(struct ath12k_base *ab)
 {
 	struct ath12k_dp *dp = ath12k_ab_to_dp(ab);

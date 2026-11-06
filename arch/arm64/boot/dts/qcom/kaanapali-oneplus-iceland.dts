@@ -1279,6 +1279,9 @@
 		compatible = "pci17cb,110e";
 		reg = <0x10000 0x0 0x0 0x0 0x0>;
 
+		/* The 2.4 GHz MAC hears no 5 GHz networks: run on one MAC */
+		qcom,no-dbs;
+
 		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply = <&vreg_pmu_aon_0p59>;
 		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;

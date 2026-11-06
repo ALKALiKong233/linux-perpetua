@@ -2549,6 +2549,13 @@ struct ath12k_wmi_pdev_set_hw_mode_cmd {
 	__le32 num_band_to_mac;
 } __packed;
 
+struct ath12k_wmi_pdev_set_mac_config_cmd {
+	__le32 tlv_header;
+	__le32 pdev_id;
+	__le32 concurrent_scan_config_bits;
+	__le32 fw_mode_config_bits;
+} __packed;
+
 struct ath12k_wmi_ppe_threshold_params {
 	__le32 numss_m1; /** NSS - 1*/
 	__le32 ru_info;
@@ -5419,6 +5426,7 @@ struct ath12k_wmi_base {
 	u32 sbs_lower_band_end_freq;
 	struct ath12k_hw_mode_info hw_mode_info;
 
+
 	u8 dp_peer_meta_data_ver;
 };
 
@@ -6664,6 +6672,7 @@ int ath12k_wmi_fils_discovery(struct ath12k *ar, u32 vdev_id, u32 interval,
 			      bool unsol_bcast_probe_resp_enabled);
 int ath12k_wmi_probe_resp_tmpl(struct ath12k *ar, u32 vdev_id,
 			       struct sk_buff *tmpl);
+int ath12k_wmi_disable_dbs(struct ath12k_base *ab);
 int ath12k_wmi_set_hw_mode(struct ath12k_base *ab,
 			   enum wmi_host_hw_mode_config_type mode);
 int ath12k_wmi_set_bios_cmd(struct ath12k_base *ab, u32 param_id,
