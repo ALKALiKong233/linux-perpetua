@@ -45,9 +45,12 @@
 	};
 
 	chosen {
-		bootargs = "rdinit=/rescue/mainline-init panic=0 loglevel=7 log_buf_len=2M bootconfig";
+		/*
+		 * The init_boot every phone shares carries the boot userspace. The
+		 * Bluetooth options start the Peri with its factory RAM patch and NVM.
+		 */
+		bootargs = "rdinit=/init console=tty0 panic=0 loglevel=7 log_buf_len=2M bootconfig hci_uart.pad4_peri_probe=1 hci_uart.pad4_peri_load_fw=1 btqca.pad4_factory_nvm=1";
 
-		/* The bootloader ramdisk carries the rescue and boot userspace. */
 		fdt-handoff {
 			stock-compatible = "qcom,canoe";
 			stock-model = "Qualcomm Technologies, Inc. Canoe MTP,iceland-O IN";
@@ -1384,8 +1387,8 @@
 };
 
 &remoteproc_adsp {
-	firmware-name = "qcom/kaanapali/iceland/adsp.mbn",
-			"qcom/kaanapali/iceland/adsp_dtb.mbn";
+	firmware-name = "qcom/kaanapali/oneplus/iceland/adsp.mdt",
+			"qcom/kaanapali/oneplus/iceland/adsp_dtb.mdt";
 
 	status = "okay";
 };
