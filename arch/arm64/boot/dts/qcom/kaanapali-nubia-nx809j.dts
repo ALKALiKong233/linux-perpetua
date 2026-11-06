@@ -1432,7 +1432,7 @@
 };
 
 &gpu_zap_shader {
-	firmware-name = "qcom/kaanapali/nubia/nx809j/gen80200_zap.mbn";
+	firmware-name = "qcom/kaanapali/nubia/nx809j-vendor/gen80200_zap.mbn";
 };
 
 &i2c3 {
@@ -1494,7 +1494,7 @@
 		reset-gpios = <&tlmm 61 GPIO_ACTIVE_LOW>;
 
 		awinic,audio-channel = <1>;
-		firmware-name = "qcom/kaanapali/nubia/nx809j/aw88461_acf.bin";
+		firmware-name = "qcom/kaanapali/nubia/nx809j-vendor/aw88461_acf.bin";
 	};
 
 	speaker_left: amplifier@35 {
@@ -1508,7 +1508,7 @@
 		reset-gpios = <&tlmm 76 GPIO_ACTIVE_LOW>;
 
 		awinic,audio-channel = <0>;
-		firmware-name = "qcom/kaanapali/nubia/nx809j/aw88461_acf.bin";
+		firmware-name = "qcom/kaanapali/nubia/nx809j-vendor/aw88461_acf.bin";
 	};
 };
 
@@ -1538,7 +1538,7 @@
 };
 
 &ipa {
-	firmware-name = "qcom/kaanapali/nubia/nx809j/ipa_fws.mbn";
+	firmware-name = "qcom/kaanapali/nubia/nx809j/ipa_fws.mdt";
 
 	status = "okay";
 };
@@ -1774,20 +1774,20 @@
 };
 
 &remoteproc_adsp {
-	firmware-name = "qcom/kaanapali/nubia/nx809j/adsp.mbn",
-			"qcom/kaanapali/nubia/nx809j/adsp_dtb.mbn";
+	firmware-name = "qcom/kaanapali/nubia/nx809j/adsp.mdt",
+			"qcom/kaanapali/nubia/nx809j/adsp_dtb.mdt";
 
 	status = "okay";
 };
 
 &remoteproc_cdsp {
-	firmware-name = "qcom/kaanapali/nubia/nx809j/cdsp.mbn",
-			"qcom/kaanapali/nubia/nx809j/cdsp_dtb.mbn";
+	firmware-name = "qcom/kaanapali/nubia/nx809j/cdsp.mdt",
+			"qcom/kaanapali/nubia/nx809j/cdsp_dtb.mdt";
 };
 
 &remoteproc_mpss {
-	firmware-name = "qcom/kaanapali/nubia/nx809j/modem.mbn",
-			"qcom/kaanapali/nubia/nx809j/modem_dtb.mbn";
+	firmware-name = "qcom/kaanapali/nubia/nx809j/modem.mdt",
+			"qcom/kaanapali/nubia/nx809j/modem_dtb.mdt";
 
 	status = "okay";
 };
