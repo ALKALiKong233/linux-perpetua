@@ -915,6 +915,54 @@
 	firmware-name = "qcom/kaanapali/iceland/gen80200_zap.mbn";
 };
 
+/*
+ * The tablet cools the SoC through its back alone: throttle the GPU from
+ * 90 °C instead of the SoC's 105, as the old root did at runtime.
+ */
+&gpuss_0_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_1_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_2_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_3_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_4_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_5_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_6_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_7_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_8_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_9_alert0 {
+	temperature = <90000>;
+};
+
+&gpuss_10_alert0 {
+	temperature = <90000>;
+};
+
 &i2c0 {
 	clock-frequency = <400000>;
 
