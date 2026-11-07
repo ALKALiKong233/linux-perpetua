@@ -13,6 +13,7 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 
@@ -478,6 +479,18 @@ static int mdss_probe(struct platform_device *pdev)
 		return PTR_ERR(mdss);
 
 	platform_set_drvdata(pdev, mdss);
+
+	/*
+	 * On Eliza, state the core reset leaves behind stalls the first DSI
+	 * enable after the splash (command DMA busy, CTL reset incomplete).
+	 * One power-off of the MDSS domain clears it: suspend once now, the
+	 * first user powers it back on.
+	 */
+	if (of_device_is_compatible(dev->of_node, "qcom,eliza-mdss")) {
+		dev_pm_genpd_release_boot_on(dev);
+		pm_runtime_get_sync(dev);
+		pm_runtime_put_sync(dev);
+	}
 
 	/*
 	 * MDP5/DPU based devices don't have a flat hierarchy. There is a top
