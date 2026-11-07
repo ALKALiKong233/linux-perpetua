@@ -672,6 +672,29 @@ void dev_pm_genpd_synced_poweroff(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(dev_pm_genpd_synced_poweroff);
 
+/*
+ * dev_pm_genpd_release_boot_on - Let the genpd power off before sync_state
+ *
+ * @dev: A device that is attached to the genpd.
+ *
+ * A genpd found on at boot stays on until its provider's sync_state. A
+ * consumer that takes over what the bootloader left running, and needs the
+ * domain to power off once before its first use, releases it with this.
+ */
+void dev_pm_genpd_release_boot_on(struct device *dev)
+{
+	struct generic_pm_domain *genpd;
+
+	genpd = dev_to_genpd_safe(dev);
+	if (!genpd)
+		return;
+
+	genpd_lock(genpd);
+	genpd->stay_on = false;
+	genpd_unlock(genpd);
+}
+EXPORT_SYMBOL_GPL(dev_pm_genpd_release_boot_on);
+
 /**
  * dev_pm_genpd_set_hwmode() - Set the HW mode for the device and its PM domain.
  *

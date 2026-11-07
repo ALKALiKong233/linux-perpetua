@@ -327,6 +327,7 @@ int dev_pm_genpd_remove_notifier(struct device *dev);
 void dev_pm_genpd_set_next_wakeup(struct device *dev, ktime_t next);
 ktime_t dev_pm_genpd_get_next_hrtimer(struct device *dev);
 void dev_pm_genpd_synced_poweroff(struct device *dev);
+void dev_pm_genpd_release_boot_on(struct device *dev);
 int dev_pm_genpd_set_hwmode(struct device *dev, bool enable);
 bool dev_pm_genpd_get_hwmode(struct device *dev);
 int dev_pm_genpd_rpm_always_on(struct device *dev, bool on);
@@ -406,6 +407,9 @@ static inline ktime_t dev_pm_genpd_get_next_hrtimer(struct device *dev)
 	return KTIME_MAX;
 }
 static inline void dev_pm_genpd_synced_poweroff(struct device *dev)
+{ }
+
+static inline void dev_pm_genpd_release_boot_on(struct device *dev)
 { }
 
 static inline int dev_pm_genpd_set_hwmode(struct device *dev, bool enable)
