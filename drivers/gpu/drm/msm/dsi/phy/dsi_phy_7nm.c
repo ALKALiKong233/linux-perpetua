@@ -99,6 +99,15 @@ struct dsi_pll_7nm {
 
 	struct pll_7nm_cached_state cached_state;
 
+	/*
+	 * Until the DSI host enables the PHY, the PLL stays as the bootloader
+	 * left it, with its splash on the panel. The clock framework prepares
+	 * and unprepares the PLL before that, when the display clocks
+	 * (CLK_OPS_PARENT_ENABLE) are reparented onto it or found unused: run
+	 * unconfigured, it turned the panel white until the host took over.
+	 */
+	bool handover;
+
 	struct dsi_pll_7nm *slave;
 };
 
@@ -496,6 +505,9 @@ static int dsi_pll_7nm_vco_prepare(struct clk_hw *hw)
 	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
 	int rc;
 
+	if (pll_7nm->handover)
+		return 0;
+
 	dsi_pll_enable_pll_bias(pll_7nm);
 	if (pll_7nm->slave)
 		dsi_pll_enable_pll_bias(pll_7nm->slave);
@@ -545,10 +557,8 @@ static void dsi_pll_disable_sub(struct dsi_pll_7nm *pll)
 	dsi_pll_disable_pll_bias(pll);
 }
 
-static void dsi_pll_7nm_vco_unprepare(struct clk_hw *hw)
+static void dsi_pll_7nm_stop(struct dsi_pll_7nm *pll_7nm)
 {
-	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
-
 	/*
 	 * To avoid any stray glitches while abruptly powering down the PLL
 	 * make sure to gate the clock using the clock enable bit before
@@ -564,6 +574,15 @@ static void dsi_pll_7nm_vco_unprepare(struct clk_hw *hw)
 	/* flush, ensure all register writes are done */
 	wmb();
 	pll_7nm->phy->pll_on = false;
+}
+
+static void dsi_pll_7nm_vco_unprepare(struct clk_hw *hw)
+{
+	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
+
+	if (pll_7nm->handover)
+		return;
+	dsi_pll_7nm_stop(pll_7nm);
 }
 
 static unsigned long dsi_pll_7nm_vco_recalc_rate(struct clk_hw *hw,
@@ -877,6 +896,7 @@ static int dsi_pll_7nm_init(struct msm_dsi_phy *phy)
 
 	pll_7nm->phy = phy;
 	phy->pll_data = pll_7nm;
+	pll_7nm->handover = true;
 
 	ret = pll_7nm_register(pll_7nm, phy->provided_clocks->hws);
 	if (ret) {
@@ -985,6 +1005,13 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 		DRM_DEV_ERROR(&phy->pdev->dev,
 			      "%s: PHY timing calculation failed\n", __func__);
 		return -EINVAL;
+	}
+
+	/* The splash ends here: the PHY is configured with the PLL off. */
+	if (pll->handover) {
+		pll->handover = false;
+		if (dsi_phy_hw_v4_0_is_pll_on(phy))
+			dsi_pll_7nm_stop(pll);
 	}
 
 	if (dsi_phy_hw_v4_0_is_pll_on(phy))
