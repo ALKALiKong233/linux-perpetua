@@ -179,6 +179,13 @@ static int msm_drm_init(struct device *dev, const struct drm_driver *drv,
 	if (ret)
 		goto err_msm_uninit;
 
+	/*
+	 * Powered from before the boot framebuffer lets go of the display until
+	 * fbdev's first modeset: in between, the display powered off under the
+	 * bootloader's splash, which turned a command-mode panel white.
+	 */
+	pm_runtime_get_sync(dev);
+
 	if (priv->kms_init) {
 		ret = msm_drm_kms_init(dev, drv);
 		if (ret)
@@ -196,9 +203,12 @@ static int msm_drm_init(struct device *dev, const struct drm_driver *drv,
 	if (priv->kms_init)
 		msm_drm_kms_post_init(dev);
 
+	pm_runtime_put(dev);
+
 	return 0;
 
 err_msm_uninit:
+	pm_runtime_put(dev);
 	msm_drm_uninit(dev, gpu_ops);
 
 	return ret;
