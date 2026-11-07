@@ -11,6 +11,7 @@
 
 #include <linux/backlight.h>
 #include <linux/delay.h>
+#include <linux/devm-helpers.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/regulator/consumer.h>
@@ -90,8 +91,20 @@ struct rm692h5 {
 	bool retained, shutting_down;
 	/* Lit (between enable and disable), and in DCS idle mode. */
 	bool enabled, idle;
+	/*
+	 * After a cold start the panel's memory holds random lines until the
+	 * host's first frame, and they showed even at brightness 0: the display
+	 * stays off, and the brightness 0 its init sets, until light runs.
+	 */
+	bool dark;
+	struct delayed_work light;
+	/* Still lit with the bootloader's logo. */
+	bool splash;
 	ktime_t wake;
 };
+
+/* The host's first frame follows enable by up to about 70 ms (fbdev). */
+#define RM692H5_FIRST_FRAME_MS 100
 
 /* The one panel, for the ambient parameter. */
 static struct rm692h5 *rm692h5_panel;
@@ -570,10 +583,6 @@ static void rm692h5_on(struct mipi_dsi_multi_context *dsi_ctx,
 	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x35, 0x00);
 	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x53, 0x20);
 	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x51, 0x00, 0x00);
-	mipi_dsi_dcs_exit_sleep_mode_multi(dsi_ctx);
-	mipi_dsi_msleep(dsi_ctx, 100);
-	mipi_dsi_dcs_set_display_on_multi(dsi_ctx);
-	mipi_dsi_msleep(dsi_ctx, 20);
 }
 
 static int rm692h5_off(struct rm692h5 *ctx)
@@ -592,7 +601,7 @@ static int rm692h5_off(struct rm692h5 *ctx)
 	return dsi_ctx.accum_err;
 }
 
-/* Power the panel up from off and initialize it, display on. */
+/* Power the panel up from off and initialize it, display off until light. */
 static int rm692h5_cold(struct rm692h5 *ctx, const struct rm692h5_rate *rate)
 {
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
@@ -605,6 +614,8 @@ static int rm692h5_cold(struct rm692h5 *ctx, const struct rm692h5_rate *rate)
 
 	rm692h5_reset(ctx);
 	rm692h5_on(&dsi_ctx, rate);
+	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
+	mipi_dsi_msleep(&dsi_ctx, 100);
 
 	drm_dsc_pps_payload_pack(&pps, &ctx->dsc);
 	mipi_dsi_picture_parameter_set_multi(&dsi_ctx, &pps);
@@ -617,6 +628,7 @@ static int rm692h5_cold(struct rm692h5 *ctx, const struct rm692h5_rate *rate)
 	msleep(28);
 	ctx->rate = rate;
 	ctx->idle = false;
+	ctx->dark = true;
 
 	return 0;
 
@@ -634,6 +646,24 @@ static int rm692h5_prepare(struct drm_panel *panel)
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
 
 	ctx->wake = ktime_get();
+	if (ctx->splash) {
+		struct drm_dsc_picture_parameter_set pps;
+		int ret = rm692h5_power_on(ctx);
+
+		ctx->splash = false;
+		if (ret)
+			return ret;
+		/*
+		 * The bootloader left the panel lit with its picture. Only this
+		 * host's compression goes out, so the picture stays until the
+		 * first frame replaces it; a new refresh rate follows below.
+		 */
+		ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+		drm_dsc_pps_payload_pack(&pps, &ctx->dsc);
+		mipi_dsi_picture_parameter_set_multi(&dsi_ctx, &pps);
+		mipi_dsi_compression_mode_multi(&dsi_ctx, true);
+		ctx->retained = true;
+	}
 	if (!ctx->retained)
 		return rm692h5_cold(ctx, rate);
 
@@ -686,6 +716,8 @@ static int rm692h5_enable(struct drm_panel *panel)
 	}
 
 	ctx->enabled = !ret;
+	if (!ret && ctx->dark)
+		schedule_delayed_work(&ctx->light, msecs_to_jiffies(RM692H5_FIRST_FRAME_MS));
 	dev_info(&ctx->dsi->dev, "wake retained=%d took %lld us result=%d\n",
 		 retained, ktime_us_delta(ktime_get(), ctx->wake), ret);
 	return ret;
@@ -697,6 +729,8 @@ static int rm692h5_disable(struct drm_panel *panel)
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
 
 	ctx->enabled = false;
+	/* A panel that stays initialized must not stay off at brightness 0. */
+	flush_delayed_work(&ctx->light);
 	if (ctx->shutting_down)
 		return 0;
 
@@ -787,6 +821,9 @@ static int rm692h5_bl_update_status(struct backlight_device *bl)
 	u16 brightness = backlight_get_brightness(bl);
 	int ret;
 
+	if (ctx->dark)
+		return 0;
+
 	/*
 	 * Idle mode keeps ambient_brightness, also while the host wakes only to
 	 * draw, and leaving it restores this level. A blank into idle mode sets
@@ -805,6 +842,18 @@ static int rm692h5_bl_update_status(struct backlight_device *bl)
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
 	return 0;
+}
+
+static void rm692h5_light(struct work_struct *work)
+{
+	struct rm692h5 *ctx = container_of(to_delayed_work(work), struct rm692h5, light);
+
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+
+	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	ctx->dark = false;
+	backlight_update_status(ctx->panel.backlight);
 }
 
 static const struct backlight_ops rm692h5_bl_ops = {
@@ -847,6 +896,10 @@ static int rm692h5_probe(struct mipi_dsi_device *dsi)
 				     "Failed to get reset-gpios\n");
 
 	ctx->dsi = dsi;
+	ret = devm_delayed_work_autocancel(dev, &ctx->light, rm692h5_light);
+	if (ret)
+		return ret;
+	ctx->splash = true;
 	mipi_dsi_set_drvdata(dsi, ctx);
 	rm692h5_panel = ctx;
 
