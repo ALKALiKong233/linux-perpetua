@@ -349,6 +349,10 @@ static int novatek_nt37706_bl_update_status(struct backlight_device *bl)
 	u16 brightness = backlight_get_brightness(bl);
 	int ret;
 
+	/* The link is down while the panel is off; enabling it sends this. */
+	if (!ctx->panel.prepared)
+		return 0;
+
 	/* Sent in high-speed mode, big-endian, as the vendor does. */
 	mutex_lock(&ctx->fp->lock);
 	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
