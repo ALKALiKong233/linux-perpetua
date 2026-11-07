@@ -50,6 +50,15 @@ Perpetua since the design was written:
   factory's tolerance for handshake noise and late replies, and the
   WCD939x keeping D+/D- on the PHY when the firmware repeats the Type-C
   state as VBUS rises (the glitch made the adapter cut VBUS).
+- devices-24 on 2026-10-31: the pump holds the I2C clock while it serves a
+  block read, 3.5 ms for the 14-byte ADC read, so replies to frames that
+  arrived during a sample took up to 22 ms. The main pump is now read in the
+  gap after each reply, as the factory does (frames come 43 to 96 ms apart),
+  and its properties come from the last sample. Worst replies over three
+  sessions: 1.6, 1.6 and 2.6 ms. A session in which the adapter spoke is
+  retried ten seconds after a protocol error or timeout, up to three times.
+  battmgr reports Charging from the battery current while the buck input is
+  suspended, and computes POWER_NOW from voltage and current.
 
 The commit split in section 4 still applies.
 
@@ -632,9 +641,11 @@ produces plausible but wrong temperatures. Keep `-ERANGE` on open or shorted
 sensors.
 
 **Reply latency.** The factory target is about 1.5 ms. Regmap, the auxiliary
-dispatch and the mux all add overhead. Compare `worst_reply_us`,
-`worst_irq_wait_us` and `worst_sample_us` with the stack's figures before
-allowing any power grant.
+dispatch and the mux all add overhead. A 2-byte transfer on the pump's bus
+takes 0.3 to 0.9 ms; a block read can take 3.5 ms while the pump holds the
+clock. Nothing else may use the main pump's bus while a frame may arrive:
+read it in the gap after a reply. debugfs `worst reply` is the slowest
+interrupt-to-reply time of the session.
 
 **Buck vote.** Writing ICL=0 is a vote, and the readback stays at 2 A. Keep
 the 3-sample physical confirmation. Releasing the vote (-1) must never
