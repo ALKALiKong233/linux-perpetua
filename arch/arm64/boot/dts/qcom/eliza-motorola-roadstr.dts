@@ -722,7 +722,7 @@
 };
 
 &remoteproc_wpss {
-	firmware-name = "qcom/eliza/motorola/roadstr/wpss.mdt";
+	firmware-name = "qcom/eliza/motorola/roadstr/qca6750/wpss.mdt";
 
 	status = "okay";
 };
