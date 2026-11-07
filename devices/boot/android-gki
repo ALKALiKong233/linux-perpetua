@@ -10,10 +10,14 @@ template that the vendor signed (Nubia signs boot with its own key) loses
 that signature, which an unlocked bootloader accepts.
 Needs avbtool and unpack_bootimg.
 
-Usage: devices/boot/android-gki boot|init_boot TEMPLATE PAYLOAD OUTPUT [EVIDENCE]
+Usage: devices/boot/android-gki boot|init_boot TEMPLATE PAYLOAD OUTPUT [EVIDENCE] [--tail TAIL]
 
 EVIDENCE, when given, is a directory that receives the avbtool
 verification, the unpacked header and the unpacked image.
+
+TAIL, for boot, is a filesystem image written right after the kernel, at the
+next page. The bootloader loads only what the header lists and never reads
+it; Linux mounts it in place from the partition.
 """
 import hashlib
 import json
@@ -39,10 +43,17 @@ def sha256(data):
 
 
 def main():
-    if len(sys.argv) not in (5, 6) or sys.argv[1] not in ('boot', 'init_boot'):
+    args = sys.argv[1:]
+    tail = b''
+    if '--tail' in args:
+        at = args.index('--tail')
+        tail = Path(args[at + 1]).read_bytes()
+        del args[at:at + 2]
+    if len(args) not in (4, 5) or args[0] not in ('boot', 'init_boot') or (tail and args[0] != 'boot'):
         sys.exit(__doc__)
-    partition, template, payload, output = sys.argv[1], *map(Path, sys.argv[2:5])
-    evidence = Path(sys.argv[5]) if len(sys.argv) == 6 else None
+    assert len(tail) % PAGE == 0, 'tail is not a whole number of pages'
+    partition, template, payload, output = args[0], *map(Path, args[1:4])
+    evidence = Path(args[4]) if len(args) == 5 else None
     stock = template.read_bytes()
     content = payload.read_bytes()
     field, other = ((KERNEL_SIZE, RAMDISK_SIZE) if partition == 'boot'
@@ -60,12 +71,14 @@ def main():
     salt = re.search(r'^\s*Salt:\s*([0-9a-f]+)\s*$', info, re.M).group(1)
     props = re.findall(r"^\s*Prop: (\S+) -> '(.*)'$", info, re.M)
 
-    output.write_bytes(bytes(header) + content + b'\0' * (-len(content) % PAGE))
+    output.write_bytes(bytes(header) + content + b'\0' * (-len(content) % PAGE) + tail)
     run('avbtool', 'add_hash_footer', '--image', output, '--partition_size', len(stock),
         '--partition_name', partition, '--hash_algorithm', 'sha256', '--algorithm', 'NONE',
         '--salt', salt, *[a for key, value in props for a in ('--prop', f'{key}:{value}')])
     image = output.read_bytes()
     assert len(image) == len(stock) and image[:PAGE] == header
+    start = PAGE + len(content) + -len(content) % PAGE
+    assert image[start:start + len(tail)] == tail, 'tail is not after the kernel'
 
     with tempfile.TemporaryDirectory() as scratch:
         # avbtool checks the hash descriptor against <partition>.img next
