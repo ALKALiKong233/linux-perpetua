@@ -350,7 +350,8 @@ static int q6apm_voice_validate_cal(const struct q6apm_voice_graph *graph,
 
 		if (sg->sub_graph_id != sgid)
 			continue;
-		if (sg->scenario_id != APM_SUB_GRAPH_SID_AUDIO_VOICE_CALL || (*seen & BIT(i)))
+		/* The graph services may split a subgraph's calibration over tables. */
+		if (sg->scenario_id != APM_SUB_GRAPH_SID_AUDIO_VOICE_CALL)
 			return -EINVAL;
 		*seen |= BIT(i);
 		return 0;
