@@ -16,7 +16,6 @@
 
 #define VOICE_GRAPH_MAGIC 0x504f564d /* MVOP */
 #define VOICE_MAX_SUBGRAPHS 8
-#define VOICE_ACTIVE_MAGIC 0x4153564d /* MVSA */
 #define VOICE_SESSION_MAX_COMMANDS 32
 #define VOICE_CAL_TABLE 0x08001163
 
@@ -58,6 +57,9 @@ struct q6apm_voice {
 	struct delayed_work ucm_work;
 	struct task_struct *backend_task;
 	struct snd_pcm_substream *backends[2];
+	/* The profile's name and the board its header gave at probe */
+	char *profile;
+	struct q6apm_voice_board board;
 	const struct firmware *firmware;
 	struct q6apm_voice_graph graphs[2];
 	struct q6apm_voice_command commands[VOICE_SESSION_MAX_COMMANDS];
@@ -359,7 +361,7 @@ static int q6apm_voice_validate_cal(const struct q6apm_voice_graph *graph,
 static void q6apm_voice_patch_volume(struct q6apm_voice *voice)
 {
 	if (voice->keys)
-		put_unaligned_le32(q6apm_voice_board()->volume_levels - 1 - voice->volume,
+		put_unaligned_le32(voice->board.volume_levels - 1 - voice->volume,
 				   voice->keys + voice->volume_offset);
 }
 
@@ -407,21 +409,23 @@ static int q6apm_voice_parse_session(struct q6apm_voice *voice)
 	size_t size = voice->firmware->size;
 	u32 open_size, count, opened = 0, prepared = 0, calibrated[2] = { };
 	u32 i, j, previous = 0, started = 0;
+	struct q6apm_voice_board board;
 	int ret;
 
-	if (size < 16 || size > SZ_256K ||
-	    get_unaligned_le32(data) != VOICE_ACTIVE_MAGIC ||
-	    get_unaligned_le32(data + 4) != 1)
+	/* The voice links were made for the board the profile had at probe. */
+	if (size > SZ_256K || q6apm_voice_board_read(voice->firmware, &board) ||
+	    memcmp(&board, &voice->board, sizeof(board)))
 		return -EINVAL;
 	open_size = get_unaligned_le32(data + 8);
 	count = get_unaligned_le32(data + 12);
-	if (open_size > size - 16 || !count || count > VOICE_SESSION_MAX_COMMANDS)
+	if (open_size > size - Q6APM_VOICE_PROFILE_HEADER || !count ||
+	    count > VOICE_SESSION_MAX_COMMANDS)
 		return -EINVAL;
-	ret = q6apm_voice_parse_data(voice, data + 16, open_size);
+	ret = q6apm_voice_parse_data(voice, data + Q6APM_VOICE_PROFILE_HEADER, open_size);
 	if (ret)
 		return ret;
-	data += 16 + open_size;
-	size -= 16 + open_size;
+	data += Q6APM_VOICE_PROFILE_HEADER + open_size;
+	size -= Q6APM_VOICE_PROFILE_HEADER + open_size;
 	for (i = 0; i < count; i++) {
 		struct q6apm_voice_command *command = &voice->commands[i];
 
@@ -674,8 +678,7 @@ static int q6apm_voice_call_put(struct q6apm_voice *voice, bool requested)
 			return 0;
 		if (voice->pinned || snd_soc_component_active(component))
 			return -EBUSY;
-		ret = request_firmware(&voice->firmware, q6apm_voice_board()->firmware,
-			       component->dev);
+		ret = request_firmware(&voice->firmware, voice->profile, component->dev);
 		if (ret)
 			return ret;
 		ret = q6apm_voice_parse_session(voice);
@@ -701,7 +704,8 @@ static int q6apm_voice_call_put(struct q6apm_voice *voice, bool requested)
 	/* ASoC takes pcm_mutex itself; no session lock may be held across its calls. */
 	WRITE_ONCE(voice->backend_task, current);
 	for (i = 0; i < 2; i++) {
-		ret = q6apm_voice_backend_open(component, i, &voice->backends[i]);
+		ret = q6apm_voice_backend_open(component, &voice->board, i,
+					       &voice->backends[i]);
 		if (ret)
 			break;
 	}
@@ -807,10 +811,12 @@ static int q6apm_voice_put(struct snd_kcontrol *control, struct snd_ctl_elem_val
 static int q6apm_voice_volume_info(struct snd_kcontrol *control,
 				   struct snd_ctl_elem_info *info)
 {
+	struct q6apm_voice *voice = (void *)control->private_value;
+
 	info->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	info->count = 1;
 	info->value.integer.min = 0;
-	info->value.integer.max = q6apm_voice_board()->volume_levels - 1;
+	info->value.integer.max = voice->board.volume_levels - 1;
 	return 0;
 }
 
@@ -834,7 +840,7 @@ static int q6apm_voice_volume_put(struct snd_kcontrol *control,
 	u32 previous;
 	int ret;
 
-	if (level < 0 || level >= q6apm_voice_board()->volume_levels)
+	if (level < 0 || level >= voice->board.volume_levels)
 		return -EINVAL;
 	guard(mutex)(&voice->lock);
 	if (level == voice->volume)
@@ -880,17 +886,29 @@ struct q6apm_voice *q6apm_voice_create(struct snd_soc_component *component)
 	u32 i;
 	int ret;
 
-	if (!q6apm_voice_board())
-		return NULL;
 	voice = kzalloc_obj(*voice);
 	if (!voice)
 		return ERR_PTR(-ENOMEM);
+	/* A board without a voice profile has no calls; nor does a broken one. */
+	ret = q6apm_voice_board_load(component->card, &voice->board);
+	if (ret) {
+		if (ret != -ENOENT)
+			dev_err(component->dev, "voice profile unusable: %d\n", ret);
+		kfree(voice);
+		return NULL;
+	}
+	voice->profile = kasprintf(GFP_KERNEL, Q6APM_VOICE_PROFILE,
+				   component->card->driver_name, component->card->name);
+	if (!voice->profile) {
+		kfree(voice);
+		return ERR_PTR(-ENOMEM);
+	}
 	voice->component = component;
 	mutex_init(&voice->lock);
 	mutex_init(&voice->operation_lock);
 	mutex_init(&voice->ucm_lock);
 	INIT_DELAYED_WORK(&voice->ucm_work, q6apm_voice_ucm_work);
-	voice->volume = q6apm_voice_board()->volume_levels - 1;
+	voice->volume = voice->board.volume_levels - 1;
 	for (i = 0; i < ARRAY_SIZE(voice->controls); i++) {
 		voice->controls[i].voice = voice;
 		voice->controls[i].ucm = i == 1;
@@ -899,6 +917,7 @@ struct q6apm_voice *q6apm_voice_create(struct snd_soc_component *component)
 	controls[2].private_value = (unsigned long)voice;
 	ret = snd_soc_add_component_controls(component, controls, ARRAY_SIZE(controls));
 	if (ret) {
+		kfree(voice->profile);
 		kfree(voice);
 		return ERR_PTR(ret);
 	}
@@ -918,5 +937,6 @@ void q6apm_voice_free(struct q6apm_voice *voice)
 			ret);
 		return;
 	}
+	kfree(voice->profile);
 	kfree(voice);
 }

@@ -29,10 +29,10 @@ void q6apm_voice_backend_close(struct snd_pcm_substream **stream)
 	*stream = NULL;
 }
 
-int q6apm_voice_backend_open(struct snd_soc_component *component, unsigned int graph,
+int q6apm_voice_backend_open(struct snd_soc_component *component,
+			     const struct q6apm_voice_board *board, unsigned int graph,
 			     struct snd_pcm_substream **stream)
 {
-	const struct q6apm_voice_board *board = q6apm_voice_board();
 	const char *name = graph ? Q6APM_VOICE_TX_LINK : Q6APM_VOICE_RX_LINK;
 	struct snd_soc_pcm_runtime *rtd, *selected = NULL;
 	struct snd_soc_dai *dai;
@@ -44,8 +44,6 @@ int q6apm_voice_backend_open(struct snd_soc_component *component, unsigned int g
 	struct snd_pcm_hw_params *params __free(kfree) = kzalloc_obj(*params);
 	if (!params)
 		return -ENOMEM;
-	if (!board)
-		return -ENODEV;
 	for_each_card_rtds(component->card, rtd)
 		if (!strcmp(rtd->dai_link->name, name)) {
 			selected = rtd;

@@ -404,26 +404,26 @@ static void sc8280xp_put_voice_node(void *node)
 }
 
 /*
- * Boards with modem voice graphs get two private links, copies of the
- * physical backends the graphs use. The voice driver opens them to power
+ * Boards with a voice profile get two private links, copies of the
+ * physical backends its graphs use. The voice driver opens them to power
  * codecs, clocks and SoundWire while the DSP moves the call audio.
  */
 static int sc8280xp_add_voice_links(struct snd_soc_card *card)
 {
-	const struct q6apm_voice_board *board = q6apm_voice_board();
 	struct snd_soc_dai_link *links, *rx = NULL, *tx = NULL;
 	struct snd_soc_dai_link_component *platform;
+	struct q6apm_voice_board board;
 	struct device_node *dais;
 	int i, ret, count = card->num_links;
 
-	if (!board)
+	if (q6apm_voice_board_load(card, &board))
 		return 0;
 	for (i = 0; i < count; i++) {
 		struct snd_soc_dai_link *link = &card->dai_link[i];
 
-		if (link->no_pcm && link->id == board->rx_port)
+		if (link->no_pcm && link->id == board.rx_port)
 			rx = link;
-		else if (link->no_pcm && link->id == board->tx_port)
+		else if (link->no_pcm && link->id == board.tx_port)
 			tx = link;
 	}
 	if (!rx || !tx)
