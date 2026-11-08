@@ -95,5 +95,6 @@ int q6apm_voice_backend_open(struct snd_soc_component *component,
 			     const struct q6apm_voice_board *board, unsigned int graph,
 			     struct snd_pcm_substream **stream);
 void q6apm_voice_backend_close(struct snd_pcm_substream **stream);
+void q6apm_voice_backend_trigger(struct snd_pcm_substream *stream, int cmd);
 
 #endif

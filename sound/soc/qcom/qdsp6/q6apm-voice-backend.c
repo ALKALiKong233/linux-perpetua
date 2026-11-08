@@ -29,6 +29,31 @@ void q6apm_voice_backend_close(struct snd_pcm_substream **stream)
 	*stream = NULL;
 }
 
+/*
+ * The DSP starts and stops the voice graphs itself, so ALSA never triggers
+ * the voice links. Codecs that power up on the stream's start, such as smart
+ * amplifiers, get the start and stop from here.
+ */
+void q6apm_voice_backend_trigger(struct snd_pcm_substream *stream, int cmd)
+{
+	struct snd_soc_pcm_runtime *rtd;
+	struct snd_soc_dai *dai;
+	int i, ret;
+
+	if (!stream)
+		return;
+	rtd = snd_soc_substream_to_rtd(stream);
+	snd_pcm_stream_lock_irq(stream);
+	for_each_rtd_codec_dais(rtd, i, dai) {
+		if (!dai->driver->ops || !dai->driver->ops->trigger)
+			continue;
+		ret = dai->driver->ops->trigger(stream, cmd, dai);
+		if (ret)
+			dev_warn(dai->dev, "voice trigger %d failed: %d\n", cmd, ret);
+	}
+	snd_pcm_stream_unlock_irq(stream);
+}
+
 int q6apm_voice_backend_open(struct snd_soc_component *component,
 			     const struct q6apm_voice_board *board, unsigned int graph,
 			     struct snd_pcm_substream **stream)

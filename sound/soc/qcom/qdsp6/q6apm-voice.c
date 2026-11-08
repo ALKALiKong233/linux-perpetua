@@ -647,6 +647,9 @@ static int q6apm_voice_call_cleanup(struct q6apm_voice *voice)
 {
 	int i, ret;
 
+	/* Codecs stop before the graphs stop feeding them. */
+	for (i = 0; i < 2; i++)
+		q6apm_voice_backend_trigger(voice->backends[i], SNDRV_PCM_TRIGGER_STOP);
 	scoped_guard(mutex, &voice->lock) {
 		voice->call_active = false;
 		ret = q6apm_voice_stop_pair(voice);
@@ -717,8 +720,11 @@ static int q6apm_voice_call_put(struct q6apm_voice *voice, bool requested)
 		if (!ret)
 			voice->call_active = true;
 	}
-	if (!ret)
+	if (!ret) {
+		for (i = 0; i < 2; i++)
+			q6apm_voice_backend_trigger(voice->backends[i], SNDRV_PCM_TRIGGER_START);
 		return 1;
+	}
 out:
 	cleanup = q6apm_voice_call_cleanup(voice);
 	if (cleanup)
