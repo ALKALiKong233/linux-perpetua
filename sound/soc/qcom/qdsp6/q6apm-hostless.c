@@ -42,6 +42,9 @@ struct q6apm_hostless {
 	u32 map_handle;
 	u32 sid;
 	bool has_sid;
+	/* GET_CFG reply: the parameter's data, copied in the callback */
+	void *get_data;
+	size_t get_size;
 	int result;
 	bool waiting;
 	bool uncertain;
@@ -104,6 +107,21 @@ static int q6apm_hostless_callback(const struct gpr_resp_pkt *packet, void *priv
 		if (basic->status)
 			dev_err(session->dev, "hostless opcode %#x destination %#x DSP status %#x\n",
 				session->opcode, session->destination, basic->status);
+	} else if (packet->hdr.opcode == APM_CMD_RSP_GET_CFG &&
+		   session->opcode == APM_CMD_GET_CFG) {
+		const struct apm_module_param_data *header;
+		size_t size;
+
+		/* A status word, then the parameter as the DSP holds it */
+		if (packet->payload_size < (int)(4 + sizeof(*header)) || !packet->payload)
+			goto out;
+		header = packet->payload + 4;
+		size = min_t(size_t, header->param_size,
+			     packet->payload_size - 4 - sizeof(*header));
+		result = *(const u32 *)packet->payload || header->error_code ? -EREMOTEIO : 0;
+		session->get_size = session->get_data ? min(size, session->get_size) : 0;
+		if (session->get_size)
+			memcpy(session->get_data, header + 1, session->get_size);
 	} else if (packet->hdr.opcode == APM_CMD_RSP_SHARED_MEM_MAP_REGIONS &&
 		   session->opcode == APM_CMD_SHARED_MEM_MAP_REGIONS) {
 		if (packet->payload_size < (int)sizeof(*map) || !packet->payload)
@@ -446,6 +464,47 @@ int q6apm_hostless_set_cfg(struct q6apm_hostless *session, u32 destination,
 	return q6apm_hostless_send(session, packet);
 }
 EXPORT_SYMBOL_GPL(q6apm_hostless_set_cfg);
+
+int q6apm_hostless_get_cfg(struct q6apm_hostless *session, u32 destination,
+			   u32 module, u32 parameter, void *data, size_t *size)
+{
+	struct apm_module_param_data *config;
+	size_t packet_size;
+	unsigned long flags;
+	int ret;
+
+	if (!module || !parameter || !*size ||
+	    (destination != APM_MODULE_INSTANCE_ID && destination != VCPM_MODULE_INSTANCE_ID))
+		return -EINVAL;
+	packet_size = size_add(sizeof(*config), ALIGN(*size, 8));
+	if (packet_size > PAGE_SIZE)
+		return -E2BIG;
+	guard(mutex)(&session->lock);
+	if (!q6apm_hostless_idle(session))
+		return -EINPROGRESS;
+	if (!READ_ONCE(session->ready))
+		return -ENODEV;
+	struct gpr_pkt *packet __free(kfree) = audioreach_alloc_cmd_pkt(packet_size,
+					APM_CMD_GET_CFG, 0, session->port->id, destination);
+	if (IS_ERR(packet))
+		return PTR_ERR(packet);
+	config = (void *)packet + GPR_HDR_SIZE + APM_CMD_HDR_SIZE;
+	config->module_instance_id = module;
+	config->param_id = parameter;
+	config->param_size = *size;
+	spin_lock_irqsave(&session->response_lock, flags);
+	session->get_data = data;
+	session->get_size = *size;
+	spin_unlock_irqrestore(&session->response_lock, flags);
+	ret = q6apm_hostless_send(session, packet);
+	spin_lock_irqsave(&session->response_lock, flags);
+	*size = ret ? 0 : session->get_size;
+	session->get_data = NULL;
+	session->get_size = 0;
+	spin_unlock_irqrestore(&session->response_lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(q6apm_hostless_get_cfg);
 
 static int q6apm_hostless_oob(struct q6apm_hostless *session,
 			      struct q6apm_hostless_buffer *buffer, u32 opcode, u32 destination)

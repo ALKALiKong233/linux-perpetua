@@ -24,6 +24,9 @@ int q6apm_hostless_set_payload(struct q6apm_hostless *session, u32 destination,
 			       const void *data, size_t size);
 int q6apm_hostless_set_cfg(struct q6apm_hostless *session, u32 destination,
 			   u32 module, u32 parameter, const void *data, size_t size);
+/* Reads one parameter; *size is the buffer's size in, the reply's out. */
+int q6apm_hostless_get_cfg(struct q6apm_hostless *session, u32 destination,
+			   u32 module, u32 parameter, void *data, size_t *size);
 int q6apm_hostless_register_cfg(struct q6apm_hostless *session, const void *data, size_t size);
 int q6apm_hostless_prepare(struct q6apm_hostless *session);
 int q6apm_hostless_start(struct q6apm_hostless *session);

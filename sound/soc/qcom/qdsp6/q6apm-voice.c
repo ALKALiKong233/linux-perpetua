@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/cleanup.h>
+#include <linux/debugfs.h>
 #include <linux/firmware.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -75,6 +76,11 @@ struct q6apm_voice {
 	bool call_active;
 	bool ucm_requested;
 	bool ucm_pinned;
+	/* debugfs voice_get: the running graphs' parameters, as the DSP reports them */
+	struct dentry *debugfs;
+	u8 reply[256];
+	size_t reply_size;
+	int reply_status;
 };
 
 /* Preserve the full firmware payload; only extract ownership for safe CLOSE. */
@@ -868,6 +874,54 @@ static int q6apm_voice_volume_put(struct snd_kcontrol *control,
 	return 1;
 }
 
+/* Write "GRAPH DESTINATION MODULE PARAMETER SIZE" (graph 0 RX, 1 TX); read the reply. */
+static ssize_t q6apm_voice_get_write(struct file *file, const char __user *from,
+				     size_t count, loff_t *ppos)
+{
+	struct q6apm_voice *voice = file->private_data;
+	u32 graph, destination, module, parameter;
+	char text[64];
+	size_t size;
+
+	if (count >= sizeof(text))
+		return -EINVAL;
+	if (copy_from_user(text, from, count))
+		return -EFAULT;
+	text[count] = 0;
+	if (sscanf(text, "%u %i %i %i %zu", &graph, &destination, &module, &parameter,
+		   &size) != 5 || graph > 1 || !size || size > sizeof(voice->reply))
+		return -EINVAL;
+	guard(mutex)(&voice->lock);
+	if (!voice->call_active || !voice->graphs[graph].session)
+		return -ENODEV;
+	voice->reply_status = q6apm_hostless_get_cfg(voice->graphs[graph].session, destination,
+						     module, parameter, voice->reply, &size);
+	voice->reply_size = size;
+	return count;
+}
+
+static ssize_t q6apm_voice_get_read(struct file *file, char __user *to,
+				    size_t count, loff_t *ppos)
+{
+	struct q6apm_voice *voice = file->private_data;
+	char text[16 + 3 * sizeof(voice->reply)];
+	int length;
+
+	scoped_guard(mutex, &voice->lock) {
+		length = scnprintf(text, sizeof(text), "%d:", voice->reply_status);
+		length += scnprintf(text + length, sizeof(text) - length, " %*ph\n",
+				    (int)min_t(size_t, voice->reply_size, 64), voice->reply);
+	}
+	return simple_read_from_buffer(to, count, ppos, text, length);
+}
+
+static const struct file_operations q6apm_voice_get_fops = {
+	.open = simple_open,
+	.read = q6apm_voice_get_read,
+	.write = q6apm_voice_get_write,
+	.llseek = default_llseek,
+};
+
 struct q6apm_voice *q6apm_voice_create(struct snd_soc_component *component)
 {
 	struct snd_kcontrol_new controls[3] = { {
@@ -928,6 +982,8 @@ struct q6apm_voice *q6apm_voice_create(struct snd_soc_component *component)
 		kfree(voice);
 		return ERR_PTR(ret);
 	}
+	voice->debugfs = debugfs_create_file("voice_get", 0600, component->debugfs_root, voice,
+					     &q6apm_voice_get_fops);
 	return voice;
 }
 
@@ -944,6 +1000,7 @@ void q6apm_voice_free(struct q6apm_voice *voice)
 			ret);
 		return;
 	}
+	debugfs_remove(voice->debugfs);
 	kfree(voice->profile);
 	kfree(voice);
 }
