@@ -697,14 +697,12 @@ static int qcom_battmgr_bat_get_property(struct power_supply *psy,
 		val->intval = battmgr->status.power_now;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		if (unit != QCOM_BATTMGR_UNIT_mAh &&
-		    battmgr->variant != OPLUS_BATTMGR_KAANAPALI)
+		if (unit != QCOM_BATTMGR_UNIT_mAh)
 			return -ENODATA;
 		val->intval = battmgr->info.design_capacity;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
-		if (unit != QCOM_BATTMGR_UNIT_mAh &&
-		    battmgr->variant != OPLUS_BATTMGR_KAANAPALI)
+		if (unit != QCOM_BATTMGR_UNIT_mAh)
 			return -ENODATA;
 		val->intval = battmgr->info.last_full_capacity;
 		break;
@@ -2417,6 +2415,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
 					     "failed to register wireless charing power supply\n");
 	} else {
+		/* The property firmware has no unit to ask for: it counts charge. */
+		battmgr->unit = QCOM_BATTMGR_UNIT_mAh;
+
 		if (battmgr->variant == QCOM_BATTMGR_SM8550 ||
 		    battmgr->variant == OPLUS_BATTMGR_SM8550 ||
 		    battmgr->variant == OPLUS_BATTMGR_KAANAPALI)
