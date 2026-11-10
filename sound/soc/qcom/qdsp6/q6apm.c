@@ -176,38 +176,6 @@ static int q6apm_get_apm_state(struct q6apm *apm)
 	return apm->state;
 }
 
-/*
- * A DSP without an audio protection domain opens its GPR channel before its
- * APM listens, and drops what arrives until then. Ask in short steps, so the
- * sound card waits for the DSP and not for one long timeout.
- */
-static void q6apm_wait_apm_state(struct q6apm *apm)
-{
-	struct gpr_pkt *pkt __free(kfree) = audioreach_alloc_apm_cmd_pkt(0,
-								APM_CMD_GET_SPF_STATE, 0);
-	int tries;
-
-	if (IS_ERR(pkt))
-		return;
-
-	pkt->hdr.src_port = apm->gdev->svc.id;
-
-	mutex_lock(&apm->lock);
-	for (tries = 0; tries < 50; tries++) {
-		apm->result.opcode = 0;
-		if (gpr_send_pkt(apm->gdev, pkt) < 0)
-			break;
-		if (wait_event_timeout(apm->wait,
-				       apm->result.opcode == APM_CMD_RSP_GET_SPF_STATE,
-				       msecs_to_jiffies(100)))
-			break;
-	}
-	mutex_unlock(&apm->lock);
-
-	if (tries == 50)
-		dev_err(apm->dev, "the DSP's APM did not answer in 5 s\n");
-}
-
 bool q6apm_is_adsp_ready(void)
 {
 	if (g_apm)
@@ -987,7 +955,7 @@ static int apm_probe(gpr_device_t *gdev)
 
 	g_apm = apm;
 
-	q6apm_wait_apm_state(apm);
+	q6apm_get_apm_state(apm);
 
 	ret = snd_soc_register_component(dev, &q6apm_audio_component, NULL, 0);
 	if (ret < 0) {
