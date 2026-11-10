@@ -35,6 +35,7 @@ struct packet_router {
 	struct pdr_handle *pdr;
 	struct workqueue_struct *rxwq;
 	struct work_struct rx_work;
+	struct work_struct register_work;
 	struct list_head rx_list;
 };
 
@@ -578,6 +579,19 @@ static void of_register_apr_devices(struct device *dev, const char *svc_path)
 	}
 }
 
+/*
+ * The channel takes no reply while its own probe runs: rpmsg announces the
+ * channel, and GLINK grants receive intents, only once the probe is back. A
+ * service that asks the DSP something in its probe would wait out its
+ * timeout, so the services without a protection domain are added from here.
+ */
+static void apr_register_work(struct work_struct *work)
+{
+	struct packet_router *apr = container_of(work, struct packet_router, register_work);
+
+	of_register_apr_devices(apr->dev, NULL);
+}
+
 static int apr_remove_device(struct device *dev, void *svc_path)
 {
 	struct apr_device *adev = to_apr_device(dev);
@@ -641,6 +655,7 @@ static int apr_probe(struct rpmsg_device *rpdev)
 		return -ENOMEM;
 	}
 	INIT_WORK(&apr->rx_work, apr_rxwq);
+	INIT_WORK(&apr->register_work, apr_register_work);
 
 	apr->pdr = pdr_handle_alloc(apr_pd_status, apr);
 	if (IS_ERR(apr->pdr)) {
@@ -658,7 +673,7 @@ static int apr_probe(struct rpmsg_device *rpdev)
 	if (ret)
 		goto handle_release;
 
-	of_register_apr_devices(dev, NULL);
+	schedule_work(&apr->register_work);
 
 	return 0;
 
@@ -674,6 +689,7 @@ static void apr_remove(struct rpmsg_device *rpdev)
 	struct packet_router *apr = dev_get_drvdata(&rpdev->dev);
 
 	pdr_handle_release(apr->pdr);
+	cancel_work_sync(&apr->register_work);
 	device_for_each_child(&rpdev->dev, NULL, apr_remove_device);
 	destroy_workqueue(apr->rxwq);
 }
