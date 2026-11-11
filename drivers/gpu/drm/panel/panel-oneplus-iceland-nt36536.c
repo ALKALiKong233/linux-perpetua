@@ -7,7 +7,6 @@
 
 #include <linux/backlight.h>
 #include <linux/delay.h>
-#include <linux/devm-helpers.h>
 #include <linux/fb.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
@@ -46,18 +45,7 @@ struct panel_info {
 	 */
 	struct notifier_block fb_nb;
 	bool splash;
-
-	/*
-	 * This host's first frame follows the first enable by up to about
-	 * 70 ms (fbdev), and the initialized panel is white until it arrives:
-	 * that once, the backlight comes on late.
-	 */
-	struct backlight_device *backlight;
-	struct delayed_work light;
-	bool first_frame;
 };
-
-#define NT36536_FIRST_FRAME_MS 100
 
 struct panel_desc {
 	unsigned int width_mm;
@@ -347,7 +335,7 @@ static int nt36536_fb_event(struct notifier_block *nb, unsigned long event, void
 	struct panel_info *pinfo = container_of(nb, struct panel_info, fb_nb);
 
 	if (event == FB_EVENT_FB_UNREGISTERED && pinfo->splash)
-		backlight_disable(pinfo->backlight);
+		backlight_disable(pinfo->panel.backlight);
 
 	return NOTIFY_DONE;
 }
@@ -364,7 +352,6 @@ static int nt36536_prepare(struct drm_panel *panel)
 	struct panel_info *pinfo = to_panel_info(panel);
 	int ret;
 
-	pinfo->first_frame = pinfo->splash;
 	pinfo->splash = false;
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
@@ -385,30 +372,10 @@ static int nt36536_prepare(struct drm_panel *panel)
 	return 0;
 }
 
-static void nt36536_light(struct work_struct *work)
-{
-	struct panel_info *pinfo = container_of(to_delayed_work(work), struct panel_info, light);
-
-	backlight_enable(pinfo->backlight);
-}
-
-static int nt36536_enable(struct drm_panel *panel)
-{
-	struct panel_info *pinfo = to_panel_info(panel);
-
-	schedule_delayed_work(&pinfo->light,
-			      pinfo->first_frame ? msecs_to_jiffies(NT36536_FIRST_FRAME_MS) : 0);
-
-	return 0;
-}
-
 static int nt36536_disable(struct drm_panel *panel)
 {
 	struct panel_info *pinfo = to_panel_info(panel);
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = pinfo->dsi[0] };
-
-	cancel_delayed_work_sync(&pinfo->light);
-	backlight_disable(pinfo->backlight);
 
 	mipi_dsi_dcs_set_display_off_multi(&dsi_ctx);
 
@@ -479,7 +446,6 @@ static enum drm_panel_orientation nt36536_get_orientation(struct drm_panel *pane
 }
 
 static const struct drm_panel_funcs nt36536_panel_funcs = {
-	.enable = nt36536_enable,
 	.disable = nt36536_disable,
 	.prepare = nt36536_prepare,
 	.unprepare = nt36536_unprepare,
@@ -550,13 +516,9 @@ static int nt36536_probe(struct mipi_dsi_device *dsi)
 
 	pinfo->panel.prepare_prev_first = true;
 
-	pinfo->backlight = devm_of_find_backlight(dev);
-	if (IS_ERR(pinfo->backlight))
-		return dev_err_probe(dev, PTR_ERR(pinfo->backlight), "Failed to get backlight\n");
-
-	ret = devm_delayed_work_autocancel(dev, &pinfo->light, nt36536_light);
+	ret = drm_panel_of_backlight(&pinfo->panel);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "Failed to get backlight\n");
 
 	pinfo->splash = true;
 	pinfo->fb_nb.notifier_call = nt36536_fb_event;
