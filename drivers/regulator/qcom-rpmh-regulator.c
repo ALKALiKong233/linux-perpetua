@@ -39,6 +39,7 @@ enum rpmh_regulator_type {
  * @LDO:			Linear Dropout regulator.
  * @BOB:			Buck/Boost type regulator.
  * @VS:			Simple voltage ON/OFF switch.
+ * @LS:			Load switch.
  * @NUM_REGULATOR_TYPES:	Number of regulator types.
  */
 enum regulator_hw_type {
@@ -46,6 +47,7 @@ enum regulator_hw_type {
 	LDO,
 	BOB,
 	VS,
+	LS,
 	NUM_REGULATOR_TYPES,
 };
 
@@ -59,6 +61,7 @@ static const struct resource_name_formats vreg_rsc_name_lookup[NUM_REGULATOR_TYP
 	[LDO]	= {"L%d%s", "ldo%s%d"},
 	[BOB]	= {"B%d%s", "bob%s%d"},
 	[VS]	= {"VS%d%s", "vs%s%d"},
+	[LS]	= {"LS%d%s", "ls%s%d"},
 };
 
 #define RPMH_REGULATOR_REG_VRM_VOLTAGE		0x0
@@ -1663,6 +1666,10 @@ static const struct rpmh_vreg_init_data pmh0101_vreg_data[] = {
 	RPMH_VREG("ldo18",  LDO, 18, &pmic5_nldo530,      "vdd-l18"),
 	RPMH_VREG("bob1",   BOB, 1,  &pmic5_bob,          "vdd-bob1"),
 	RPMH_VREG("bob2",   BOB, 2,  &pmic5_bob,          "vdd-bob2"),
+	RPMH_VREG("ls1",    LS,  1,  &pmic4_lvs,          NULL),
+	RPMH_VREG("ls2",    LS,  2,  &pmic4_lvs,          NULL),
+	RPMH_VREG("ls3",    LS,  3,  &pmic4_lvs,          NULL),
+	RPMH_VREG("ls4",    LS,  4,  &pmic4_lvs,          NULL),
 	{}
 };
 
