@@ -127,6 +127,8 @@ struct dpu_hw_intf {
 	struct dpu_hw_intf_ops ops;
 };
 
+bool dpu_hw_intf_boot_running(const struct dpu_intf_cfg *cfg, void __iomem *addr);
+
 struct dpu_hw_intf *dpu_hw_intf_init(struct drm_device *dev,
 				     const struct dpu_intf_cfg *cfg,
 				     void __iomem *addr,

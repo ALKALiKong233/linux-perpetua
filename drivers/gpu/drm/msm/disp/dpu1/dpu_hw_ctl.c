@@ -595,6 +595,9 @@ static void dpu_hw_ctl_intf_cfg_v1(struct dpu_hw_ctl *ctx,
 	dsc_active = DPU_REG_READ(c, CTL_DSC_ACTIVE);
 	merge_3d_active = DPU_REG_READ(c, CTL_MERGE_3D_ACTIVE);
 
+	if (cfg->boot_stream)
+		dsc_active = 0;
+
 	if (cfg->intf)
 		intf_active |= BIT(cfg->intf - INTF_0);
 
@@ -784,6 +787,18 @@ static void dpu_hw_ctl_set_active_lms(struct dpu_hw_ctl *ctx,
 	}
 
 	DPU_REG_WRITE(&ctx->hw, CTL_LAYER_ACTIVE, val);
+}
+
+/**
+ * dpu_hw_ctl_boot_active() - Whether the bootloader left a control path at work:
+ * driving an interface, and out of reset.
+ * @cfg:  ctl_path catalog entry
+ * @addr: mapped register io address of MDP
+ */
+bool dpu_hw_ctl_boot_active(const struct dpu_ctl_cfg *cfg, void __iomem *addr)
+{
+	return readl_relaxed(addr + cfg->base + CTL_INTF_ACTIVE) &&
+	       !(readl_relaxed(addr + cfg->base + CTL_SW_RESET) & BIT(0));
 }
 
 /**

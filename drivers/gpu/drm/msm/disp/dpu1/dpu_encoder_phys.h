@@ -315,6 +315,8 @@ unsigned int dpu_encoder_helper_get_dsc(struct dpu_encoder_phys *phys_enc);
 
 struct drm_dsc_config *dpu_encoder_get_dsc_config(struct drm_encoder *drm_enc);
 
+bool dpu_encoder_boot_stream(struct drm_encoder *drm_enc);
+
 u32 dpu_encoder_get_drm_fmt(struct dpu_encoder_phys *phys_enc);
 
 bool dpu_encoder_needs_periph_flush(struct dpu_encoder_phys *phys_enc);

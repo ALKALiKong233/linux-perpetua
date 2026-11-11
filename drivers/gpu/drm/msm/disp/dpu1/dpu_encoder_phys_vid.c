@@ -3,6 +3,8 @@
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
+#include <linux/delay.h>
+
 #include "dpu_encoder_phys.h"
 #include "dpu_hw_interrupts.h"
 #include "dpu_hw_merge3d.h"
@@ -265,6 +267,7 @@ static void dpu_encoder_phys_vid_setup_timing_engine(
 	u32 fmt_fourcc;
 	unsigned long lock_flags;
 	struct dpu_hw_intf_cfg intf_cfg = { 0 };
+	struct dpu_hw_intf_status status = { 0 };
 
 	drm_mode_init(&mode, &phys_enc->cached_mode);
 
@@ -315,6 +318,26 @@ static void dpu_encoder_phys_vid_setup_timing_engine(
 	if (intf_cfg.mode_3d && phys_enc->hw_pp->merge_3d)
 		intf_cfg.merge_3d = phys_enc->hw_pp->merge_3d->idx;
 
+	/*
+	 * A disable stops the timing engine: one found running here is the
+	 * bootloader's. While the display goes on showing that stream the
+	 * engine runs through this setup, of the mode it already has, and the
+	 * first flush puts our layout under it. A stream that ended leaves an
+	 * engine to stop, and to set up as after any disable.
+	 */
+	phys_enc->hw_intf->ops.get_status(phys_enc->hw_intf, &status);
+	if (status.is_en) {
+		intf_cfg.boot_stream = dpu_encoder_boot_stream(phys_enc->parent);
+		if (!intf_cfg.boot_stream) {
+			phys_enc->hw_intf->ops.enable_timing(phys_enc->hw_intf, 0);
+			/* Longer than a frame of any mode. */
+			msleep(50);
+		}
+		drm_info(phys_enc->parent->dev, "intf_%d: bootloader's stream %s at frame %u\n",
+			 phys_enc->hw_intf->idx - INTF_0,
+			 intf_cfg.boot_stream ? "goes on" : "stopped", status.frame_count);
+	}
+
 	spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
 	phys_enc->hw_intf->ops.setup_timing_gen(phys_enc->hw_intf,
 			&timing_params, fmt);
@@ -331,7 +354,12 @@ static void dpu_encoder_phys_vid_setup_timing_engine(
 
 	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
 
-	programmable_fetch_config(phys_enc, &timing_params);
+	/*
+	 * The running engine keeps the fetch start the bootloader gave it:
+	 * without it, it fetched no further frame.
+	 */
+	if (!intf_cfg.boot_stream)
+		programmable_fetch_config(phys_enc, &timing_params);
 }
 
 static void dpu_encoder_phys_vid_vblank_irq(void *arg)

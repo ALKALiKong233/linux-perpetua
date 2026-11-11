@@ -45,6 +45,9 @@ struct dpu_hw_stage_cfg {
  * @stream_sel:            Stream selection for multi-stream interfaces
  * @dsc:                   DSC BIT masks used
  * @cwb:                   CWB BIT masks used
+ * @boot_stream:           The interface runs the stream the bootloader started:
+ *                         the DSC set the bootloader left is replaced, not
+ *                         added to
  */
 struct dpu_hw_intf_cfg {
 	enum dpu_intf intf;
@@ -57,6 +60,7 @@ struct dpu_hw_intf_cfg {
 	int stream_sel;
 	unsigned int cwb;
 	unsigned int dsc;
+	bool boot_stream;
 };
 
 /**
@@ -350,6 +354,8 @@ static inline struct dpu_hw_ctl *to_dpu_hw_ctl(struct dpu_hw_blk *hw)
 {
 	return container_of(hw, struct dpu_hw_ctl, base);
 }
+
+bool dpu_hw_ctl_boot_active(const struct dpu_ctl_cfg *cfg, void __iomem *addr);
 
 struct dpu_hw_ctl *dpu_hw_ctl_init(struct drm_device *dev,
 				   const struct dpu_ctl_cfg *cfg,

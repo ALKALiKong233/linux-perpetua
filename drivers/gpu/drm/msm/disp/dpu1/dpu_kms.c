@@ -1066,6 +1066,42 @@ static void dpu_kms_mdp_snapshot(struct msm_disp_state *disp_state, struct msm_k
 	pm_runtime_put_sync(&dpu_kms->pdev->dev);
 }
 
+/*
+ * Whether the bootloader's display runs, for dpu_kms_hw_init() to go on from
+ * instead of a reset: a control path at work, and a DSI interface with its
+ * timing engine on. The pipeline reads the bootloader's picture until our
+ * first frame: it gets the most bus bandwidth a display may ask for until
+ * that frame brings its own figure.
+ */
+static bool dpu_kms_take_over(struct msm_kms *kms)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	struct device *dev = &dpu_kms->pdev->dev;
+	const struct dpu_mdss_cfg *cat = of_device_get_match_data(dev);
+	bool ctl = false, intf = false;
+	int i;
+
+	/* The registers are read before runtime PM can power this device. */
+	if (pm_runtime_resume_and_get(dev->parent))
+		return false;
+
+	for (i = 0; i < cat->ctl_count; i++)
+		ctl |= dpu_hw_ctl_boot_active(&cat->ctl[i], dpu_kms->mmio);
+	for (i = 0; i < cat->intf_count; i++)
+		intf |= cat->intf[i].type == INTF_DSI &&
+			dpu_hw_intf_boot_running(&cat->intf[i], dpu_kms->mmio);
+
+	pm_runtime_put(dev->parent);
+
+	if (!ctl || !intf)
+		return false;
+
+	for (i = 0; i < dpu_kms->num_paths; i++)
+		icc_set_bw(dpu_kms->path[i], cat->perf->max_bw_high, cat->perf->max_bw_high);
+
+	return true;
+}
+
 static const struct msm_kms_funcs kms_funcs = {
 	.hw_init         = dpu_kms_hw_init,
 	.irq_preinstall  = dpu_core_irq_preinstall,
@@ -1082,6 +1118,7 @@ static const struct msm_kms_funcs kms_funcs = {
 	.disable_vblank  = dpu_kms_disable_vblank,
 	.destroy         = dpu_kms_destroy,
 	.snapshot        = dpu_kms_mdp_snapshot,
+	.take_over       = dpu_kms_take_over,
 #ifdef CONFIG_DEBUG_FS
 	.debugfs_init    = dpu_kms_debugfs_init,
 #endif

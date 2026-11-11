@@ -653,6 +653,23 @@ struct drm_dsc_config *dpu_encoder_get_dsc_config(struct drm_encoder *drm_enc)
 	return NULL;
 }
 
+/**
+ * dpu_encoder_boot_stream - whether the encoder's display goes on showing the
+ *   video stream the bootloader started
+ * @drm_enc: Pointer to encoder structure
+ */
+bool dpu_encoder_boot_stream(struct drm_encoder *drm_enc)
+{
+	struct msm_drm_private *priv = drm_enc->dev->dev_private;
+	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
+	int index = dpu_enc->disp_info.h_tile_instance[0];
+
+	if (dpu_enc->disp_info.intf_type == INTF_DSI)
+		return msm_dsi_boot_stream(priv->kms->dsi[index]);
+
+	return false;
+}
+
 void dpu_encoder_update_topology(struct drm_encoder *drm_enc,
 				 struct msm_display_topology *topology,
 				 struct drm_atomic_commit *state,

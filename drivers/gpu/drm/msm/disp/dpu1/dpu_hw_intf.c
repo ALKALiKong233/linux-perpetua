@@ -602,6 +602,17 @@ static void dpu_hw_intf_program_intf_cmd_cfg(struct dpu_hw_intf *intf,
 }
 
 /**
+ * dpu_hw_intf_boot_running() - Whether the bootloader left an interface's
+ * timing engine on.
+ * @cfg:  interface catalog entry
+ * @addr: mapped register io address of MDP
+ */
+bool dpu_hw_intf_boot_running(const struct dpu_intf_cfg *cfg, void __iomem *addr)
+{
+	return readl_relaxed(addr + cfg->base + INTF_TIMING_ENGINE_EN) & BIT(0);
+}
+
+/**
  * dpu_hw_intf_init() - Initializes the INTF driver for the passed
  * interface catalog entry.
  * @dev:  Corresponding device for devres management
