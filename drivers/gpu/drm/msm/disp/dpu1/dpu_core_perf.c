@@ -132,7 +132,13 @@ static void _dpu_core_perf_calc_crtc(const struct dpu_core_perf *core_perf,
 	}
 
 	perf->bw_ctl = _dpu_core_perf_calc_bw(perf_cfg, crtc);
-	perf->max_per_pipe_ib = perf_cfg->min_dram_ib;
+	/*
+	 * min_dram_ib is the floor of the peak, not the peak: a panel whose
+	 * average is above it must not ask for less at its peak, or the memory
+	 * drops under what the interface fetches once nothing else votes.
+	 */
+	perf->max_per_pipe_ib = max_t(u32, perf_cfg->min_dram_ib,
+				      DIV_ROUND_UP_ULL(perf->bw_ctl, 1000));
 	perf->core_clk_rate = _dpu_core_perf_calc_clk(perf_cfg, crtc, state);
 	DRM_DEBUG_ATOMIC(
 		"crtc=%d clk_rate=%llu core_ib=%u core_ab=%u\n",
