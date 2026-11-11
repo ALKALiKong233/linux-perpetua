@@ -35,6 +35,12 @@ struct panel_info {
 
 	struct gpio_desc *reset_gpio;
 	struct regulator_bulk_data supplies[3];
+
+	/*
+	 * Out of reset since the bootloader, with its picture: until the first
+	 * prepare.
+	 */
+	bool lit;
 };
 
 struct panel_desc {
@@ -331,6 +337,25 @@ static int nt36536_prepare(struct drm_panel *panel)
 		return ret;
 	}
 
+	if (pinfo->lit) {
+		pinfo->lit = false;
+		/*
+		 * The hosts never stopped the bootloader's video stream: the
+		 * panel shows it as it is, with nothing to reset or set up.
+		 */
+		if (pinfo->dsi[0]->host->boot_stream &&
+		    pinfo->dsi[1]->host->boot_stream)
+			return 0;
+		/*
+		 * The stream stopped under a running panel. The reset pulse
+		 * below alone left such a panel with a corrupted picture;
+		 * held in reset first, as long as it used to be between
+		 * probe and here, it came up clean.
+		 */
+		gpiod_set_value_cansleep(pinfo->reset_gpio, 1);
+		msleep(200);
+	}
+
 	nt36536_reset(pinfo);
 
 	ret = pinfo->desc->init_sequence(pinfo);
@@ -446,9 +471,19 @@ static int nt36536_probe(struct mipi_dsi_device *dsi)
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "failed to get regulators\n");
 
-	pinfo->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
+	/*
+	 * The line stays as the bootloader left it: driven and deasserted, the
+	 * panel runs, and is not stopped before the host says, at the first
+	 * prepare, whether the bootloader's picture goes on.
+	 */
+	pinfo->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_ASIS);
 	if (IS_ERR(pinfo->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(pinfo->reset_gpio), "failed to get reset gpio\n");
+	pinfo->lit = gpiod_get_direction(pinfo->reset_gpio) == GPIO_LINE_DIRECTION_OUT &&
+		     !gpiod_get_value_cansleep(pinfo->reset_gpio);
+	ret = gpiod_direction_output(pinfo->reset_gpio, !pinfo->lit);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to set reset gpio\n");
 
 	pinfo->desc = (struct panel_desc *)of_device_get_match_data(dev);
 	if (!pinfo->desc)
