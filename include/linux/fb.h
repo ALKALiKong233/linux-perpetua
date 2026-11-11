@@ -130,8 +130,11 @@ struct fb_cursor_user {
  * Register/unregister for framebuffer events
  */
 
+#ifdef CONFIG_GUMSTIX_AM200EPD
+/* only used by mach-pxa/am200epd.c */
 #define FB_EVENT_FB_REGISTERED          0x05
 #define FB_EVENT_FB_UNREGISTERED        0x06
+#endif
 
 struct fb_event {
 	struct fb_info *info;
