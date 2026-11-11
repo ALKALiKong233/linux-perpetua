@@ -95,6 +95,24 @@ static const struct backlight_ops ktz8869_backlight_ops = {
 	.update_status = ktz8869_backlight_update_status,
 };
 
+/*
+ * The brightness of a chip the bootloader left lit, 0 for a dark one. The
+ * picture under that light is still the bootloader's: the light stays as it
+ * is until someone asks for another.
+ */
+static unsigned int ktz8869_lit_brightness(struct ktz8869 *ktz)
+{
+	unsigned int on = 0, lsb = 0, msb = 0;
+
+	if (regmap_read(ktz->regmap, BACKLIGHT_ENABLE, &on) || !(on & 0x01))
+		return 0;
+	if (regmap_read(ktz->regmap, BL_BRT_LSB, &lsb) ||
+	    regmap_read(ktz->regmap, BL_BRT_MSB, &msb))
+		return 0;
+
+	return ((msb & 0xFF) << 4) | (lsb & 0xF);
+}
+
 static void ktz8869_init(struct ktz8869 *ktz)
 {
 	unsigned int bias = 0;
@@ -131,6 +149,7 @@ static int ktz8869_probe(struct i2c_client *client)
 	struct backlight_device *backlight_dev;
 	struct backlight_properties props;
 	struct ktz8869 *ktz;
+	unsigned int lit;
 	int ret = 0;
 
 	if (id->driver_data == 1 && !ktz_b)
@@ -161,10 +180,13 @@ static int ktz8869_probe(struct i2c_client *client)
 	if (IS_ERR(ktz->enable_gpio))
 		return PTR_ERR(ktz->enable_gpio);
 
+	lit = ktz8869_lit_brightness(ktz);
+	ktz->led_on = lit > 0;
+
 	memset(&props, 0, sizeof(props));
 	props.type = BACKLIGHT_RAW;
 	props.max_brightness = MAX_BRIGHTNESS;
-	props.brightness = DEFAULT_BRIGHTNESS;
+	props.brightness = lit ?: DEFAULT_BRIGHTNESS;
 	props.scale = BACKLIGHT_SCALE_LINEAR;
 
 	backlight_dev = devm_backlight_device_register(&client->dev, "ktz8869-backlight",
