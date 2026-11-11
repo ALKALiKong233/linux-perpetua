@@ -89,14 +89,15 @@
 				 <&dispcc DISP_CC_MDSS_BYTE1_CLK>,
 				 <&dispcc DISP_CC_MDSS_BYTE1_INTF_CLK>,
 				 <&dispcc DISP_CC_MDSS_PCLK1_CLK>;
-			power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>;
+			power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>,
+					<&dispcc DISP_CC_MDSS_CORE_INT2_GDSC>;
 			/*
 			 * The level the bootloader's 650 MHz MDP clock needs. With
 			 * the power domain alone the rail fell to its lowest level
 			 * and the display ran undervolted until msm took over:
 			 * register reads came back with bits missing.
 			 */
-			required-opps = <&rpmhpd_opp_turbo>;
+			required-opps = <&rpmhpd_opp_turbo>, <&rpmhpd_opp_turbo>;
 		};
 	};
 
@@ -223,6 +224,7 @@
 		/* The splash the bootloader scans out, splash_region downstream. */
 		cont_splash_mem: cont-splash@fc800000 {
 			reg = <0x0 0xfc800000 0x0 0x2b00000>;
+			iommu-addresses = <&mdss 0x0 0xfc800000 0x0 0x2b00000>;
 			no-map;
 		};
 
@@ -1199,6 +1201,16 @@
 };
 
 &mdss {
+	/*
+	 * The display is handed over as the bootloader runs it, reading the
+	 * splash memory, and with both the power domains the bootloader has
+	 * on: without the second one the control path sat in reset, and no
+	 * frame of ours came out until the whole display was reset.
+	 */
+	memory-region = <&cont_splash_mem>;
+	power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>,
+			<&dispcc DISP_CC_MDSS_CORE_INT2_GDSC>;
+
 	status = "okay";
 };
 
