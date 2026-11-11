@@ -78,6 +78,8 @@ struct sc_chip {
 	u32 native_width;
 	u32 native_height;
 	u32 again_reg;
+	/* The colour order the stock tables' mirror and flip leave */
+	u32 code;
 	const struct sc_reg_list init;
 	const struct sc_mode *modes;
 	unsigned int num_modes;
@@ -571,6 +573,7 @@ static const struct sc_chip sc_c658 = {
 	.native_width = 4224,
 	.native_height = 3136,
 	.again_reg = CCI_REG8(0x3e09),
+	.code = MEDIA_BUS_FMT_SBGGR10_1X10,
 	.init = {
 		.regs = sc_c658_init,
 		.num_regs = ARRAY_SIZE(sc_c658_init),
@@ -589,6 +592,7 @@ static const struct sc_chip sc_d154 = {
 	.native_width = 3272,
 	.native_height = 2464,
 	.again_reg = CCI_REG8(0x3e08),
+	.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 	.init = {
 		.regs = sc_d154_init,
 		.num_regs = ARRAY_SIZE(sc_d154_init),
@@ -786,10 +790,11 @@ static int sc_disable_streams(struct v4l2_subdev *sd,
 	return ret;
 }
 
-static void sc_update_pad_format(const struct sc_mode *mode,
+static void sc_update_pad_format(const struct sc_chip *chip,
+				 const struct sc_mode *mode,
 				 struct v4l2_mbus_framefmt *fmt)
 {
-	fmt->code = MEDIA_BUS_FMT_SRGGB10_1X10;
+	fmt->code = chip->code;
 	fmt->width = mode->width;
 	fmt->height = mode->height;
 	fmt->field = V4L2_FIELD_NONE;
@@ -810,7 +815,7 @@ static int sc_set_pad_format(struct v4l2_subdev *sd,
 				      width, height, fmt->format.width,
 				      fmt->format.height);
 
-	sc_update_pad_format(mode, &fmt->format);
+	sc_update_pad_format(sc->chip, mode, &fmt->format);
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE && sc->mode != mode) {
 		sc->mode = mode;
@@ -829,7 +834,7 @@ static int sc_enum_mbus_code(struct v4l2_subdev *sd,
 	if (code->index > 0)
 		return -EINVAL;
 
-	code->code = MEDIA_BUS_FMT_SRGGB10_1X10;
+	code->code = to_sc(sd)->chip->code;
 
 	return 0;
 }
@@ -843,7 +848,7 @@ static int sc_enum_frame_size(struct v4l2_subdev *sd,
 	if (fse->index >= chip->num_modes)
 		return -EINVAL;
 
-	if (fse->code != MEDIA_BUS_FMT_SRGGB10_1X10)
+	if (fse->code != chip->code)
 		return -EINVAL;
 
 	fse->min_width = chip->modes[fse->index].width;
