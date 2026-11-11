@@ -8,6 +8,8 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/linux-event-codes.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interfaces.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 /*
  * CPU throttle temperature for kaanapali-cpu-cooling.dtsi: 90 °C, the
@@ -499,6 +501,20 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/*
+		 * Stock keeps these load switches on, set with the camera rails;
+		 * what they feed is not named
+		 */
+		vreg_ls1b: ls1 {
+			regulator-name = "vreg_ls1b";
+			regulator-always-on;
+		};
+
+		vreg_ls2b: ls2 {
+			regulator-name = "vreg_ls2b";
+			regulator-always-on;
+		};
+
 		vreg_l1b_1p8: ldo1 {
 			regulator-name = "vreg_l1b_1p8";
 			regulator-min-microvolt = <1800000>;
@@ -960,6 +976,68 @@
 	};
 };
 
+&camss {
+	status = "okay";
+};
+
+&camss_csiphy4_in_port {
+	camss_csiphy4_inep: endpoint {
+		data-lanes = <1 2 3 4>;
+		remote-endpoint = <&csiphy4_out_ep>;
+	};
+};
+
+&camss_csiphy5_in_port {
+	camss_csiphy5_inep: endpoint {
+		data-lanes = <1 2 3 4>;
+		remote-endpoint = <&csiphy5_out_ep>;
+	};
+};
+
+&csiphy4 {
+	vdda-0p9-supply = <&vreg_l3d_0p8>;
+	vdda-1p2-supply = <&vreg_l1d_1p2>;
+
+	status = "okay";
+};
+
+&csiphy4_in_port {
+	csiphy4_in_ep: endpoint {
+		bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+		clock-lanes = <0>;
+		data-lanes = <1 2 3 4>;
+		remote-endpoint = <&cam_main_ep>;
+	};
+};
+
+&csiphy4_out_port {
+	csiphy4_out_ep: endpoint {
+		remote-endpoint = <&camss_csiphy4_inep>;
+	};
+};
+
+&csiphy5 {
+	vdda-0p9-supply = <&vreg_l3d_0p8>;
+	vdda-1p2-supply = <&vreg_l1d_1p2>;
+
+	status = "okay";
+};
+
+&csiphy5_in_port {
+	csiphy5_in_ep: endpoint {
+		bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+		clock-lanes = <0>;
+		data-lanes = <1 2 3 4>;
+		remote-endpoint = <&cam_front_ep>;
+	};
+};
+
+&csiphy5_out_port {
+	csiphy5_out_ep: endpoint {
+		remote-endpoint = <&camss_csiphy5_inep>;
+	};
+};
+
 &gpu_zap_shader {
 	firmware-name = "qcom/kaanapali/iceland/gen80200_zap.mbn";
 };
@@ -1082,6 +1160,71 @@
 		tfa,devindex = <5>;
 		#sound-dai-cells = <0>;
 		sound-name-prefix = "MiddleRight";
+	};
+};
+
+/* Both cameras sit on this QUP bus, not on a CCI; they share all three rails */
+&i2c9 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	/* Rear, SmartSens chip ID 0xc658 */
+	camera@36 {
+		compatible = "smartsens,c658";
+		reg = <0x36>;
+
+		/* 19.2 MHz, out of PMK8850 GPIO 2 */
+		clocks = <&rpmhcc RPMH_DIV_CLK1>;
+
+		reset-gpios = <&pmh0110_g_e0_gpios 14 GPIO_ACTIVE_LOW>;
+
+		avdd-supply = <&vreg_l14b_2p8>;
+		dvdd-supply = <&vreg_l1f_1p2>;
+		dovdd-supply = <&vreg_l2f_1p8>;
+
+		orientation = <1>;
+		rotation = <90>;
+
+		pinctrl-0 = <&cam_main_mclk_default>, <&cam_main_reset_default>;
+		pinctrl-names = "default";
+
+		port {
+			cam_main_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <662400000>;
+				remote-endpoint = <&csiphy4_in_ep>;
+			};
+		};
+	};
+
+	/* Front, SmartSens chip ID 0xd154 */
+	camera@10 {
+		compatible = "smartsens,d154";
+		reg = <0x10>;
+
+		/* 19.2 MHz, out of PMK8850 GPIO 1 */
+		clocks = <&rpmhcc RPMH_DIV_CLK1>;
+
+		reset-gpios = <&pmh0110_g_e0_gpios 13 GPIO_ACTIVE_LOW>;
+
+		avdd-supply = <&vreg_l14b_2p8>;
+		dvdd-supply = <&vreg_l1f_1p2>;
+		dovdd-supply = <&vreg_l2f_1p8>;
+
+		orientation = <0>;
+		rotation = <90>;
+
+		pinctrl-0 = <&cam_front_mclk_default>, <&cam_front_reset_default>;
+		pinctrl-names = "default";
+
+		port {
+			cam_front_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <330000000>;
+				remote-endpoint = <&csiphy5_in_ep>;
+			};
+		};
 	};
 };
 
@@ -1427,6 +1570,30 @@
 	};
 };
 
+/*
+ * Stock asks VIN 2 for the camera resets, which these two-VIN pins do not
+ * have; its power-off state, VIN 1, is what they keep after a first use
+ */
+&pmh0110_g_e0_gpios {
+	cam_front_reset_default: cam-front-reset-default-state {
+		pins = "gpio13";
+		function = "normal";
+		input-disable;
+		output-enable;
+		power-source = <1>;
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
+	};
+
+	cam_main_reset_default: cam-main-reset-default-state {
+		pins = "gpio14";
+		function = "normal";
+		input-disable;
+		output-enable;
+		power-source = <1>;
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
+	};
+};
+
 &pmih0108_e1_eusb2_repeater {
 	vdd18-supply = <&vreg_l15b_1p8>;
 	vdd3-supply = <&vreg_l5b_3p1>;
@@ -1437,6 +1604,22 @@
 		pins = "gpio6", "gpio12", "gpio15", "gpio18";
 		function = "normal";
 		bias-high-impedance;
+	};
+};
+
+&pmk8850_gpios {
+	cam_front_mclk_default: cam-front-mclk-default-state {
+		pins = "gpio1";
+		function = "func2";
+		output-enable;
+		power-source = <0>;
+	};
+
+	cam_main_mclk_default: cam-main-mclk-default-state {
+		pins = "gpio2";
+		function = "func2";
+		output-enable;
+		power-source = <0>;
 	};
 };
 
