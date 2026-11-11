@@ -891,6 +891,17 @@ config VIDEO_S5KJN1
 	  To compile this driver as a module, choose M here: the
 	  module will be called s5kjn1.
 
+config VIDEO_SMARTSENS_CS
+	tristate "SmartSens CS-series sensor support"
+	depends on GPIOLIB
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the SmartSens 13 MP and
+	  8 MP phone camera sensors with chip IDs 0xc658 and 0xd154.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called smartsens-cs.
+
 config VIDEO_T4KA3
 	tristate "Toshiba T4KA3 sensor support"
 	depends on ACPI || COMPILE_TEST
