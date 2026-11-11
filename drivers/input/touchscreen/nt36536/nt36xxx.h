@@ -63,6 +63,7 @@
 //---Input device info.---
 #define NVT_TS_NAME "NVTCapacitiveTouchScreen"
 #define NVT_PEN_NAME "NVTCapacitivePen"
+#define NVT_GESTURE_NAME "nvt_ts_gesture"
 
 //---Touch info.---
 #define TOUCH_DEFAULT_NUM_X 60
@@ -158,6 +159,10 @@ struct nvt_ts_data {
 	struct workqueue_struct *event_wq;
 	struct work_struct resume_work;
 	bool panel_on;
+	/* Screen off, the panel kept powered: the controller reports gestures only. */
+	struct input_dev *gesture_input;
+	bool gesture;
+	bool irq_wake;
 };
 
 typedef enum {

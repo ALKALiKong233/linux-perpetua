@@ -23,6 +23,7 @@
 #include <linux/proc_fs.h>
 #include <linux/input/mt.h>
 #include <linux/of_irq.h>
+#include <linux/pm_wakeup.h>
 #include <uapi/linux/sched/types.h>
 #include "nt36xxx.h"
 
@@ -49,6 +50,10 @@ uint32_t ENG_RST_ADDR  = 0x7FFF80;
 uint32_t SPI_RD_FAST_ADDR = 0;	//read from dtsi
 
 static uint8_t bTouchIsAwake = 0;
+
+/* Host commands and gesture ids as the stock driver uses them. */
+#define NVT_CMD_GESTURE		0x13
+#define NVT_GESTURE_DOUBLE_TAP	15
 
 /*******************************************************
 Description:
@@ -300,6 +305,32 @@ void nvt_fw_crc_enable(void)
 	buf[1] = 0xAE;	//enable fw crc command
 	buf[2] = 0x00;
 	CTP_SPI_WRITE(ts->client, buf, 3);
+}
+
+/* Send a host command and wait until the firmware has taken it. */
+static int32_t nvt_cmd_store(uint8_t cmd)
+{
+	uint8_t buf[2];
+	int32_t i;
+
+	nvt_set_page(ts->mmap->EVENT_BUF_ADDR);
+
+	for (i = 0; i < 5; i++) {
+		buf[0] = EVENT_MAP_HOST_CMD;
+		buf[1] = cmd;
+		CTP_SPI_WRITE(ts->client, buf, 2);
+
+		msleep(20);
+
+		buf[0] = EVENT_MAP_HOST_CMD;
+		buf[1] = 0xFF;
+		CTP_SPI_READ(ts->client, buf, 2);
+		if (buf[1] == 0x00)
+			return 0;
+	}
+
+	NVT_ERR("command 0x%02X not taken, status 0x%02X\n", cmd, buf[1]);
+	return -EIO;
 }
 
 /*******************************************************
@@ -904,8 +935,12 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 
 	mutex_lock(&ts->lock);
 
+	/*
+	 * A double tap that wakes the system arrives before the SPI bus is
+	 * back: about 660 ms on the Pad 4 from s2idle.
+	 */
 	if (ts->dev_pm_suspend) {
-		ret = wait_for_completion_timeout(&ts->dev_pm_suspend_completion, msecs_to_jiffies(500));
+		ret = wait_for_completion_timeout(&ts->dev_pm_suspend_completion, msecs_to_jiffies(2000));
 		if (!ret) {
 			NVT_ERR("system(spi) can't finished resuming procedure, skip it\n");
 			goto XFER_ERROR;
@@ -937,12 +972,26 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 		release_touch_event();
 		release_pen_event();
 		nvt_update_firmware(ts->fw_name);
+		/* The new firmware starts in touch mode. */
+		if (ts->gesture && nvt_cmd_store(NVT_CMD_GESTURE))
+			ts->gesture = false;
 		goto XFER_ERROR;
 	}
 #endif /* #if NVT_TOUCH_WDT_RECOVERY */
 
 	/* ESD protect by FW handshake */
 	if (nvt_fw_recovery(fw_state)) {
+		goto XFER_ERROR;
+	}
+
+	if (ts->gesture) {
+		if ((point_data[1] >> 3) == NVT_GESTURE_DOUBLE_TAP) {
+			pm_wakeup_event(&ts->client->dev, 500);
+			input_report_key(ts->gesture_input, KEY_WAKEUP, 1);
+			input_sync(ts->gesture_input);
+			input_report_key(ts->gesture_input, KEY_WAKEUP, 0);
+			input_sync(ts->gesture_input);
+		}
 		goto XFER_ERROR;
 	}
 
@@ -1386,6 +1435,21 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		}
 	} /* if (ts->pen_support) */
 
+	ts->gesture_input = devm_input_allocate_device(&client->dev);
+	if (ts->gesture_input == NULL) {
+		ret = -ENOMEM;
+		goto err_gesture_input_failed;
+	}
+	ts->gesture_input->name = NVT_GESTURE_NAME;
+	ts->gesture_input->id.bustype = BUS_SPI;
+	input_set_capability(ts->gesture_input, EV_KEY, KEY_WAKEUP);
+	ret = input_register_device(ts->gesture_input);
+	if (ret) {
+		NVT_ERR("register gesture input device failed. ret=%d\n", ret);
+		goto err_gesture_input_failed;
+	}
+	device_init_wakeup(&client->dev, true);
+
 	//---set int-pin & request irq---
 	client->irq = gpio_to_irq(ts->irq_gpio);
 	if (client->irq) {
@@ -1447,6 +1511,8 @@ err_create_nvt_fwu_wq_failed:
 #endif
 	free_irq(client->irq, ts);
 err_int_request_failed:
+	device_init_wakeup(&client->dev, false);
+err_gesture_input_failed:
 	if (ts->pen_support) {
 		input_unregister_device(ts->pen_input_dev);
 		ts->pen_input_dev = NULL;
@@ -1581,7 +1647,6 @@ return:
 *******************************************************/
 static int32_t nvt_ts_suspend(struct device *dev)
 {
-	uint8_t buf[4] = {0};
 	uint32_t i = 0;
 
 	if (!bTouchIsAwake) {
@@ -1600,9 +1665,12 @@ static int32_t nvt_ts_suspend(struct device *dev)
 
 	bTouchIsAwake = 0;
 
-	/*---write command to enter "deep sleep mode"---*/
-	buf[0] = EVENT_MAP_HOST_CMD;
-	buf[1] = 0x11;
+	/*
+	 * The panel stays powered while blanked, and the controller in it with
+	 * it: it waits for a double tap.
+	 */
+	ts->gesture = !nvt_cmd_store(NVT_CMD_GESTURE);
+	NVT_LOG("gesture mode %s\n", ts->gesture ? "on" : "failed");
 	mutex_unlock(&ts->lock);
 
 	/* release all touches */
@@ -1629,6 +1697,9 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	}
 
 	msleep(50);
+
+	if (ts->gesture)
+		nvt_irq_enable(true);
 
 	if (likely(ts->ic_state == NVT_IC_SUSPEND_IN))
 		ts->ic_state = NVT_IC_SUSPEND_OUT;
@@ -1663,10 +1734,13 @@ static int32_t nvt_ts_resume(struct device *dev)
 	if (ts->dev_pm_suspend)
 		pm_stay_awake(dev);
 
+	nvt_irq_enable(false);
+
 	mutex_lock(&ts->lock);
 
 	NVT_LOG("start\n");
 
+	ts->gesture = false;
 	ts->ic_state = NVT_IC_RESUME_IN;
 
 	// please make sure display reset(RESX) sequence and mipi dsi cmds sent before this
@@ -1724,9 +1798,20 @@ static int panel_unpreparing(struct drm_panel_follower *follower)
 	return nvt_ts_suspend(&ts->client->dev);
 }
 
+/*
+ * The firmware takes the gesture command only while the display still runs:
+ * after sleep-in it may leave it pending. Stock suspends touch before the LCD
+ * for the same reason.
+ */
+static int panel_disabling(struct drm_panel_follower *follower)
+{
+	return panel_unpreparing(follower);
+}
+
 static struct drm_panel_follower_funcs nt36xxx_panel_follower_funcs = {
 	.panel_prepared = panel_prepared,
 	.panel_unpreparing = panel_unpreparing,
+	.panel_disabling = panel_disabling,
 };
 #endif
 
@@ -1750,6 +1835,8 @@ static int nvt_pm_suspend(struct device *dev)
 	NVT_LOG("system enters into pm_suspend");
 	ts->dev_pm_suspend = true;
 	reinit_completion(&ts->dev_pm_suspend_completion);
+	ts->irq_wake = ts->gesture && device_may_wakeup(dev) &&
+		       !enable_irq_wake(ts->client->irq);
 	NVT_LOG("system enters into pm_suspend2");
 	return 0;
 }
@@ -1757,6 +1844,10 @@ static int nvt_pm_suspend(struct device *dev)
 static int nvt_pm_resume(struct device *dev)
 {
 	NVT_LOG("system resume from pm_suspend");
+	if (ts->irq_wake) {
+		disable_irq_wake(ts->client->irq);
+		ts->irq_wake = false;
+	}
 	ts->dev_pm_suspend = false;
 	complete(&ts->dev_pm_suspend_completion);
 	NVT_LOG("system resume from pm_suspend2");
