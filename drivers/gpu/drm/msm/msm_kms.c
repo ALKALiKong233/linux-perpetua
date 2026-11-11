@@ -6,6 +6,7 @@
  */
 
 #include <linux/aperture.h>
+#include <linux/iommu.h>
 #include <linux/kthread.h>
 #include <linux/sched/mm.h>
 #include <uapi/linux/sched/types.h>
@@ -177,6 +178,26 @@ static int msm_kms_fault_handler(void *arg, unsigned long iova, int flags, void 
 	return -ENOSYS;
 }
 
+/*
+ * Where the display's address space ends: below what the firmware has the
+ * display read at its own address, the memory the bootloader's picture is
+ * scanned out of. That stays mapped there, and nothing else may be.
+ */
+static u64 msm_kms_vm_end(struct device *iommu_dev)
+{
+	struct iommu_resv_region *region;
+	u64 end = 0x100000000;
+	LIST_HEAD(regions);
+
+	iommu_get_resv_regions(iommu_dev, &regions);
+	list_for_each_entry(region, &regions, list)
+		if (region->type == IOMMU_RESV_DIRECT)
+			end = min_t(u64, end, region->start);
+	iommu_put_resv_regions(iommu_dev, &regions);
+
+	return end;
+}
+
 struct drm_gpuvm *msm_kms_init_vm(struct drm_device *dev, struct device *mdss_dev)
 {
 	struct drm_gpuvm *vm;
@@ -204,7 +225,7 @@ struct drm_gpuvm *msm_kms_init_vm(struct drm_device *dev, struct device *mdss_de
 		return ERR_CAST(mmu);
 
 	vm = msm_gem_vm_create(dev, mmu, "mdp_kms",
-			       0x1000, 0x100000000 - 0x1000, true);
+			       0x1000, msm_kms_vm_end(iommu_dev) - 0x1000, true);
 	if (IS_ERR(vm)) {
 		dev_err(mdp_dev, "vm create, error %pe\n", vm);
 		mmu->funcs->destroy(mmu);
@@ -261,12 +282,9 @@ void msm_drm_kms_uninit(struct device *dev)
 		kms->funcs->destroy(kms);
 }
 
-int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
+/* The boot framebuffer goes and the display starts over. */
+static int msm_kms_restart_display(struct device *dev, const struct drm_driver *drv)
 {
-	struct msm_drm_private *priv = dev_get_drvdata(dev);
-	struct drm_device *ddev = priv->dev;
-	struct msm_kms *kms = priv->kms;
-	struct drm_crtc *crtc;
 	int ret;
 
 	/* the fw fb could be anywhere in memory */
@@ -275,6 +293,29 @@ int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
 		return ret;
 
 	msm_mdss_takeover(dev);
+
+	return 0;
+}
+
+int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
+{
+	struct msm_drm_private *priv = dev_get_drvdata(dev);
+	struct drm_device *ddev = priv->dev;
+	struct msm_kms *kms = priv->kms;
+	struct drm_crtc *crtc;
+	/*
+	 * A display handed over as the bootloader runs it is not restarted:
+	 * its boot framebuffer stays, with the clocks and the power it holds,
+	 * until the display controller is up and holds its own.
+	 */
+	bool running = msm_mdss_boot_display(dev);
+	int ret;
+
+	if (!running) {
+		ret = msm_kms_restart_display(dev, drv);
+		if (ret)
+			return ret;
+	}
 
 	ret = msm_disp_snapshot_init(ddev);
 	if (ret) {
@@ -288,6 +329,14 @@ int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
 		goto err_msm_uninit;
 	}
 
+	/* Handed over, but not running: it starts over as any other. */
+	if (running && !(kms->funcs->take_over && kms->funcs->take_over(kms))) {
+		running = false;
+		ret = msm_kms_restart_display(dev, drv);
+		if (ret)
+			goto err_msm_uninit;
+	}
+
 	/* Enable normalization of plane zpos */
 	ddev->mode_config.normalize_zpos = true;
 
@@ -299,6 +348,12 @@ int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
 	if (ret) {
 		DRM_DEV_ERROR(dev, "kms hw init failed: %d\n", ret);
 		goto err_msm_uninit;
+	}
+
+	if (running) {
+		ret = aperture_remove_all_conflicting_devices(drv->name);
+		if (ret)
+			goto err_msm_uninit;
 	}
 
 	drm_helper_move_panel_connectors_to_head(ddev);

@@ -25,6 +25,12 @@
 struct msm_kms_funcs {
 	/* hw initialization: */
 	int (*hw_init)(struct msm_kms *kms);
+	/*
+	 * Optional, called before hw_init on a display the bootloader hands
+	 * over: true when the hardware runs the bootloader's picture and
+	 * hw_init goes on from it, false to have the display reset first.
+	 */
+	bool (*take_over)(struct msm_kms *kms);
 	/* irq handling: */
 	void (*irq_preinstall)(struct msm_kms *kms);
 	int (*irq_postinstall)(struct msm_kms *kms);
