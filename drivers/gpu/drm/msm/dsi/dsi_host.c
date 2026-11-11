@@ -1896,6 +1896,30 @@ static int dsi_host_parse_lane_data(struct msm_dsi_host *msm_host,
 	return -EINVAL;
 }
 
+/*
+ * DSC 1.2 picks the first line's extra bits by the slice height (the DSC 1.2
+ * model's rule, RGB 4:4:4), where the helper's table holds one value.
+ */
+static u8 dsi_dsc_1_2_first_line_bpg_offset(const struct drm_dsc_config *dsc)
+{
+	unsigned int bpp = drm_dsc_get_bpp_int(dsc);
+	unsigned int uncompressed_bpg_rate = (3 * bpp + 2) * 3;
+	u8 bpg_offset;
+
+	if (dsc->slice_height < 8)
+		bpg_offset = 2 * (dsc->slice_height - 1);
+	else if (dsc->slice_height < 20)
+		bpg_offset = 12;
+	else if (dsc->slice_height <= 30)
+		bpg_offset = 13;
+	else if (dsc->slice_height < 42)
+		bpg_offset = 14;
+	else
+		bpg_offset = 15;
+
+	return min_t(unsigned int, bpg_offset, uncompressed_bpg_rate - 3 * bpp);
+}
+
 static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc_config *dsc)
 {
 	int ret;
@@ -1929,20 +1953,31 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 	drm_dsc_set_const_params(dsc);
 	drm_dsc_set_rc_buf_thresh(dsc);
 
-	/* DPU supports only pre-SCR panels */
-	ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
+	/*
+	 * A DSC 1.2 panel gets the 1.2 parameter set, as the downstream driver
+	 * and the bootloader program it; with the pre-SCR set a 1.2 decoder
+	 * showed slice errors in busy pictures. A 1.1 panel is pre-SCR.
+	 */
+	if (dsc->dsc_version_minor == 2)
+		ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_2_444);
+	else
+		ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
 	if (ret) {
 		DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
 		return ret;
 	}
 
-	/*
-	 * The helper follows VESA DSC 1.1 Table E-5 (range_max_qp[0] = 4 at
-	 * 10 bpc, 8 bpp); the DSC model's pre-SCR configuration, which panel
-	 * decoders and the downstream driver follow, uses 8.
-	 */
-	if (dsc->bits_per_component == 10 && drm_dsc_get_bpp_int(dsc) == 8)
+	if (dsc->dsc_version_minor == 2) {
+		dsc->first_line_bpg_offset = dsi_dsc_1_2_first_line_bpg_offset(dsc);
+	} else if (dsc->bits_per_component == 10 && drm_dsc_get_bpp_int(dsc) == 8) {
+		/*
+		 * The helper follows VESA DSC 1.1 Table E-5 (range_max_qp[0] =
+		 * 4 at 10 bpc, 8 bpp); the DSC model's pre-SCR configuration,
+		 * which panel decoders and the downstream driver follow, uses
+		 * 8.
+		 */
 		dsc->rc_range_params[0].range_max_qp = 8;
+	}
 
 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
 	dsc->line_buf_depth = dsc->bits_per_component + 1;
