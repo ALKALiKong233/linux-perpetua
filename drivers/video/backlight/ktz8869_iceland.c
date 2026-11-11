@@ -97,13 +97,24 @@ static const struct backlight_ops ktz8869_backlight_ops = {
 
 static void ktz8869_init(struct ktz8869 *ktz)
 {
-	/* LCD Bias config */
-	ktz8869_write(ktz, LCD_BOOST_CFG, 0x28, KTZ_MASTER);
-	ktz8869_write(ktz, OUTP_CFG, 0x1E, KTZ_MASTER);
-	ktz8869_write(ktz, OUTN_CFG, 0x1E, KTZ_MASTER);
-	ktz8869_write(ktz, LCD_BIAS_CFG1, 0x9C, KTZ_MASTER);
-	mdelay(5);
-	ktz8869_write(ktz, LCD_BIAS_CFG1, 0x9E, KTZ_MASTER);
+	unsigned int bias = 0;
+
+	/*
+	 * LCD Bias config. The bootloader leaves the bias on under its
+	 * picture; switching it off and on again there flashed the panel
+	 * white.
+	 */
+	regmap_read(ktz->regmap, LCD_BIAS_CFG1, &bias);
+	if (bias & 0x02) {
+		dev_info(&ktz->client->dev, "LCD bias left on (0x%02x)\n", bias);
+	} else {
+		ktz8869_write(ktz, LCD_BOOST_CFG, 0x28, KTZ_MASTER);
+		ktz8869_write(ktz, OUTP_CFG, 0x1E, KTZ_MASTER);
+		ktz8869_write(ktz, OUTN_CFG, 0x1E, KTZ_MASTER);
+		ktz8869_write(ktz, LCD_BIAS_CFG1, 0x9C, KTZ_MASTER);
+		mdelay(5);
+		ktz8869_write(ktz, LCD_BIAS_CFG1, 0x9E, KTZ_MASTER);
+	}
 
 	/* Backlight config */
 	ktz8869_write(ktz, BL_DIMMING, 0x48, KTZ_BOTH);
