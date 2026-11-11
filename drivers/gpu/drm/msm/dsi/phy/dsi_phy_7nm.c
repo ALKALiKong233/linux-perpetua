@@ -977,6 +977,43 @@ static void dsi_phy_hw_v4_0_lane_settings(struct msm_dsi_phy *phy)
 	}
 }
 
+static void dsi_pll_7nm_take_bias(struct dsi_pll_7nm *pll, int cnt)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&pll->pll_enable_lock, flags);
+	pll->pll_enable_cnt += cnt;
+	spin_unlock_irqrestore(&pll->pll_enable_lock, flags);
+}
+
+/*
+ * A PHY left running by the bootloader becomes an enabled one without a
+ * register written: the users of the PLL bias are counted as an enable and
+ * the prepare of a running PLL would have counted them, so that the next
+ * unprepare and disable switch it off as after any enable.
+ */
+static void dsi_7nm_phy_take_over(struct msm_dsi_phy *phy)
+{
+	struct dsi_pll_7nm *pll = phy->pll_data;
+
+	pll->handover = false;
+
+	/* The PHY itself. */
+	dsi_pll_7nm_take_bias(pll, 1);
+	if (phy->usecase == MSM_DSI_PHY_SLAVE)
+		return;
+
+	/* Its PLL, running, for itself and for the PHY it clocks. */
+	dsi_pll_7nm_take_bias(pll, 1);
+	if (phy->usecase == MSM_DSI_PHY_MASTER) {
+		pll->slave = pll_7nm_list[(phy->id + 1) % DSI_MAX];
+		dsi_pll_7nm_take_bias(pll->slave, 1);
+	}
+	phy->pll_on = true;
+	/* Nothing was reset: the PLL holds its state, there is none to restore. */
+	phy->state_saved = false;
+}
+
 static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 			      struct msm_dsi_phy_clk_request *clk_req)
 {
@@ -1005,6 +1042,15 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 		DRM_DEV_ERROR(&phy->pdev->dev,
 			      "%s: PHY timing calculation failed\n", __func__);
 		return -EINVAL;
+	}
+
+	/*
+	 * The host takes over the video stream the bootloader started: the PHY
+	 * and its PLL carry it and stay as they run.
+	 */
+	if (pll->handover && clk_req->boot_stream) {
+		dsi_7nm_phy_take_over(phy);
+		return 0;
 	}
 
 	/* The splash ends here: the PHY is configured with the PLL off. */

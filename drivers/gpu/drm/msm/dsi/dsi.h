@@ -82,6 +82,8 @@ enum drm_mode_status msm_dsi_host_check_dsc(struct mipi_dsi_host *host,
 					    const struct drm_display_mode *mode);
 unsigned long msm_dsi_host_get_mode_flags(struct mipi_dsi_host *host);
 int msm_dsi_host_register(struct mipi_dsi_host *host);
+void msm_dsi_host_hold_boot_stream(struct mipi_dsi_host *host);
+void msm_dsi_host_drop_boot_stream(struct mipi_dsi_host *host);
 void msm_dsi_host_unregister(struct mipi_dsi_host *host);
 void msm_dsi_host_set_phy_mode(struct mipi_dsi_host *host,
 			struct msm_dsi_phy *src_phy);
@@ -136,6 +138,11 @@ struct msm_dsi_phy_shared_timings {
 struct msm_dsi_phy_clk_request {
 	unsigned long bitclk_rate;
 	unsigned long escclk_rate;
+	/*
+	 * The host takes over the video stream the bootloader started: the
+	 * PHY and its PLL carry it and stay as they run.
+	 */
+	bool boot_stream;
 };
 
 void msm_dsi_phy_driver_register(void);

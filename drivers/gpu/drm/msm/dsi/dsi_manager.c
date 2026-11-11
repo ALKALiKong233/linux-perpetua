@@ -615,6 +615,20 @@ bool msm_dsi_is_master_dsi(struct msm_dsi *msm_dsi)
 	return IS_MASTER_DSI_LINK(msm_dsi->id);
 }
 
+/*
+ * True when the display's links go on sending the video stream the bootloader
+ * started: of a bonded pair, both.
+ */
+bool msm_dsi_boot_stream(struct msm_dsi *msm_dsi)
+{
+	struct msm_dsi *other_dsi = dsi_mgr_get_other_dsi(msm_dsi->id);
+
+	if (!msm_dsi->host->boot_stream)
+		return false;
+
+	return !IS_BONDED_DSI() || (other_dsi && other_dsi->host->boot_stream);
+}
+
 const char *msm_dsi_get_te_source(struct msm_dsi *msm_dsi)
 {
 	return msm_dsi->te_source;

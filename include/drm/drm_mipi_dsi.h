@@ -101,11 +101,15 @@ struct mipi_dsi_host_ops {
  * @dev: driver model device node for this DSI host
  * @ops: DSI host operations
  * @list: list management
+ * @boot_stream: the host took over the video stream the bootloader started
+ *	and never stopped it: a panel the bootloader left running shows that
+ *	stream and must not be reset or initialized
  */
 struct mipi_dsi_host {
 	struct device *dev;
 	const struct mipi_dsi_host_ops *ops;
 	struct list_head list;
+	bool boot_stream;
 };
 
 int mipi_dsi_host_register(struct mipi_dsi_host *host);

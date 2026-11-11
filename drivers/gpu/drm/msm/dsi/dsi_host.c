@@ -190,6 +190,12 @@ struct msm_dsi_host {
 	 * splash: a PHY or controller reset under it turned it white.
 	 */
 	bool splash;
+	/*
+	 * The controller was still sending the bootloader's video stream at
+	 * bind: the host holds its power and the link clocks for it, from
+	 * before the boot framebuffer lets go of them to the first power-on.
+	 */
+	bool boot_stream;
 	bool enabled;
 	int irq;
 };
@@ -838,6 +844,23 @@ bool msm_dsi_host_is_wide_bus_enabled(struct mipi_dsi_host *host)
 					MSM_DSI_6G_VER_MINOR_V2_5_0);
 }
 
+static u32 dsi_trig_ctrl(struct msm_dsi_host *msm_host)
+{
+	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
+	u32 data = 0;
+
+	/* Always assume dedicated TE pin */
+	data |= DSI_TRIG_CTRL_TE;
+	data |= DSI_TRIG_CTRL_MDP_TRIGGER(TRIGGER_NONE);
+	data |= DSI_TRIG_CTRL_DMA_TRIGGER(TRIGGER_SW);
+	data |= DSI_TRIG_CTRL_STREAM(msm_host->channel);
+	if ((cfg_hnd->major == MSM_DSI_VER_MAJOR_6G) &&
+		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2))
+		data |= DSI_TRIG_CTRL_BLOCK_DMA_WITHIN_FRAME;
+
+	return data;
+}
+
 static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
 			struct msm_dsi_phy_shared_timings *phy_shared_timings, struct msm_dsi_phy *phy)
 {
@@ -900,16 +923,7 @@ static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
 			DSI_CMD_DMA_CTRL_FROM_FRAME_BUFFER |
 			DSI_CMD_DMA_CTRL_LOW_POWER);
 
-	data = 0;
-	/* Always assume dedicated TE pin */
-	data |= DSI_TRIG_CTRL_TE;
-	data |= DSI_TRIG_CTRL_MDP_TRIGGER(TRIGGER_NONE);
-	data |= DSI_TRIG_CTRL_DMA_TRIGGER(TRIGGER_SW);
-	data |= DSI_TRIG_CTRL_STREAM(msm_host->channel);
-	if ((cfg_hnd->major == MSM_DSI_VER_MAJOR_6G) &&
-		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2))
-		data |= DSI_TRIG_CTRL_BLOCK_DMA_WITHIN_FRAME;
-	dsi_write(msm_host, REG_DSI_TRIG_CTRL, data);
+	dsi_write(msm_host, REG_DSI_TRIG_CTRL, dsi_trig_ctrl(msm_host));
 
 	data = DSI_CLKOUT_TIMING_CTRL_T_CLK_POST(phy_shared_timings->clk_post) |
 		DSI_CLKOUT_TIMING_CTRL_T_CLK_PRE(phy_shared_timings->clk_pre);
@@ -2195,6 +2209,63 @@ int msm_dsi_host_modeset_init(struct mipi_dsi_host *host,
 	return 0;
 }
 
+/*
+ * Called at bind on a display handed over as the bootloader runs it. A
+ * controller still sending the bootloader's video stream needs its link
+ * clocks, which until now only the boot framebuffer holds: the host takes
+ * them, and its power, until its first power-on, which takes the stream over
+ * or restarts the link.
+ */
+void msm_dsi_host_hold_boot_stream(struct mipi_dsi_host *host)
+{
+	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+	struct device *dev = &msm_host->pdev->dev;
+	u32 ctrl;
+
+	if (pm_runtime_resume_and_get(dev))
+		return;
+
+	ctrl = dsi_read(msm_host, REG_DSI_CTRL);
+	if ((ctrl & DSI_CTRL_ENABLE) && (ctrl & DSI_CTRL_VID_MODE_EN) &&
+	    !msm_host->cfg_hnd->ops->link_clk_enable(msm_host)) {
+		msm_host->boot_stream = true;
+		return;
+	}
+
+	pm_runtime_put(dev);
+}
+
+void msm_dsi_host_drop_boot_stream(struct mipi_dsi_host *host)
+{
+	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+
+	if (!msm_host->boot_stream)
+		return;
+
+	msm_host->boot_stream = false;
+	msm_host->cfg_hnd->ops->link_clk_disable(msm_host);
+	pm_runtime_put(&msm_host->pdev->dev);
+}
+
+/*
+ * The stream the bootloader started is taken over only as the mode this
+ * power-on is for: the link clocks at the rates that mode gets, as many
+ * lines to a frame, and the controller still sending. Anything else restarts
+ * the link.
+ */
+static bool dsi_boot_stream_fits(struct msm_dsi_host *msm_host)
+{
+	u32 ctrl = dsi_read(msm_host, REG_DSI_CTRL);
+	u32 total = dsi_read(msm_host, REG_DSI_TOTAL);
+
+	return (msm_host->mode_flags & MIPI_DSI_MODE_VIDEO) &&
+	       (ctrl & DSI_CTRL_ENABLE) && (ctrl & DSI_CTRL_VID_MODE_EN) &&
+	       (total & DSI_TOTAL_V_TOTAL__MASK) >> DSI_TOTAL_V_TOTAL__SHIFT ==
+			msm_host->mode->vtotal - 1 &&
+	       clk_get_rate(msm_host->byte_clk) == msm_host->byte_clk_rate &&
+	       clk_get_rate(msm_host->pixel_clk) == msm_host->pixel_clk_rate;
+}
+
 int msm_dsi_host_register(struct mipi_dsi_host *host)
 {
 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
@@ -2485,6 +2556,18 @@ void msm_dsi_host_get_phy_clk_req(struct mipi_dsi_host *host,
 	else
 		clk_req->bitclk_rate = msm_host->byte_clk_rate * 8;
 	clk_req->escclk_rate = msm_host->esc_clk_rate;
+
+	/*
+	 * Decided here, before the PHY is enabled, for the PHY and for the
+	 * power-on that follows. A link that restarts gets its clocks back
+	 * first, for the PLL to stop and start under them as on any enable.
+	 */
+	if (msm_host->boot_stream) {
+		host->boot_stream = dsi_boot_stream_fits(msm_host);
+		if (!host->boot_stream)
+			msm_dsi_host_drop_boot_stream(host);
+	}
+	clk_req->boot_stream = host->boot_stream;
 }
 
 void msm_dsi_host_enable_irq(struct mipi_dsi_host *host)
@@ -2552,6 +2635,33 @@ static void msm_dsi_sfpb_config(struct msm_dsi_host *msm_host, bool enable)
 			SFPB_GPREG_MASTER_PORT_EN(en));
 }
 
+/*
+ * The link runs the bootloader's video stream and goes on running it: of the
+ * controller's setup only what commands and error reports need is written.
+ * The stream's own settings stay the bootloader's until the next power-on.
+ */
+static void dsi_ctrl_take_over(struct msm_dsi_host *msm_host)
+{
+	dsi_write(msm_host, REG_DSI_CMD_DMA_CTRL,
+			DSI_CMD_DMA_CTRL_FROM_FRAME_BUFFER |
+			DSI_CMD_DMA_CTRL_LOW_POWER);
+	dsi_write(msm_host, REG_DSI_TRIG_CTRL, dsi_trig_ctrl(msm_host));
+
+	/* What the bootloader left unread is not this host's error. */
+	dsi_clk_status(msm_host);
+	dsi_fifo_status(msm_host);
+	dsi_ack_err_status(msm_host);
+	dsi_timeout_status(msm_host);
+	dsi_status(msm_host);
+	dsi_dln0_phy_err(msm_host);
+	msm_host->err_work_state = 0;
+
+	/* allow only ack-err-status to generate interrupt */
+	dsi_write(msm_host, REG_DSI_ERR_INT_MASK0, 0x13ff3fe0);
+
+	dsi_intr_ctrl(msm_host, DSI_IRQ_MASK_ERROR, 1);
+}
+
 int msm_dsi_host_power_on(struct mipi_dsi_host *host,
 			struct msm_dsi_phy_shared_timings *phy_shared_timings,
 			bool is_bonded_dsi, struct msm_dsi_phy *phy)
@@ -2596,13 +2706,20 @@ int msm_dsi_host_power_on(struct mipi_dsi_host *host,
 	}
 
 	dsi_timing_setup(msm_host, is_bonded_dsi);
-	if (msm_host->splash) {
+	if (host->boot_stream) {
 		msm_host->splash = false;
-		dsi_write(msm_host, REG_DSI_CLK_CTRL, DSI_CLK_CTRL_ENABLE_CLKS);
+		dsi_ctrl_take_over(msm_host);
+		/* The link clocks and the power are this power-on's from here. */
+		msm_dsi_host_drop_boot_stream(host);
 	} else {
-		dsi_sw_reset(msm_host);
+		if (msm_host->splash) {
+			msm_host->splash = false;
+			dsi_write(msm_host, REG_DSI_CLK_CTRL, DSI_CLK_CTRL_ENABLE_CLKS);
+		} else {
+			dsi_sw_reset(msm_host);
+		}
+		dsi_ctrl_enable(msm_host, phy_shared_timings, phy);
 	}
-	dsi_ctrl_enable(msm_host, phy_shared_timings, phy);
 
 	msm_host->power_on = true;
 	mutex_unlock(&msm_host->dev_mutex);
@@ -2646,6 +2763,7 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
 	DBG("-");
 
 	msm_host->power_on = false;
+	host->boot_stream = false;
 
 unlock_ret:
 	mutex_unlock(&msm_host->dev_mutex);
