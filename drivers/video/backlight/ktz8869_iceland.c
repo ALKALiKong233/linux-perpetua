@@ -157,6 +157,15 @@ static int ktz8869_probe(struct i2c_client *client)
 		goto end;
 	}
 
+	/*
+	 * The bootloader leaves the backlight on under its picture. From here
+	 * to the host's first frame the panel has no picture to show (this
+	 * chip is set up, the panel is reset and initialized) and lit it is
+	 * white: the backlight goes off now and starts off, for the panel to
+	 * turn on.
+	 */
+	ktz8869_write(ktz, BACKLIGHT_ENABLE, 0x00, KTZ_BOTH);
+
 	ktz->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable", GPIOD_OUT_HIGH);
 	if (IS_ERR(ktz->enable_gpio))
 		return PTR_ERR(ktz->enable_gpio);
@@ -166,6 +175,7 @@ static int ktz8869_probe(struct i2c_client *client)
 	props.max_brightness = MAX_BRIGHTNESS;
 	props.brightness = DEFAULT_BRIGHTNESS;
 	props.scale = BACKLIGHT_SCALE_LINEAR;
+	props.power = BACKLIGHT_POWER_OFF;
 
 	backlight_dev = devm_backlight_device_register(&client->dev, "ktz8869-backlight",
 					&client->dev, ktz, &ktz8869_backlight_ops, &props);
