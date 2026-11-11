@@ -41,6 +41,12 @@ struct panel_info {
 	 * prepare.
 	 */
 	bool lit;
+	/*
+	 * Blanking keeps the panel powered and out of reset, as the stock
+	 * kernel does: the touch controller, part of the same chip, then waits
+	 * for a double tap. Shutdown cuts the power.
+	 */
+	bool retained, shutting_down;
 };
 
 struct panel_desc {
@@ -331,11 +337,14 @@ static int nt36536_prepare(struct drm_panel *panel)
 	struct panel_info *pinfo = to_panel_info(panel);
 	int ret;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
-	if (ret < 0) {
-		dev_err(panel->dev, "failed to enable regulators: %d\n", ret);
-		return ret;
+	if (!pinfo->retained) {
+		ret = regulator_bulk_enable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
+		if (ret < 0) {
+			dev_err(panel->dev, "failed to enable regulators: %d\n", ret);
+			return ret;
+		}
 	}
+	pinfo->retained = false;
 
 	if (pinfo->lit) {
 		pinfo->lit = false;
@@ -388,6 +397,11 @@ static int nt36536_unprepare(struct drm_panel *panel)
 {
 	struct panel_info *pinfo = to_panel_info(panel);
 
+	if (!pinfo->shutting_down) {
+		pinfo->retained = true;
+		return 0;
+	}
+
 	gpiod_set_value_cansleep(pinfo->reset_gpio, 1);
 	regulator_bulk_disable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
 
@@ -399,6 +413,14 @@ static void nt36536_remove(struct mipi_dsi_device *dsi)
 	struct panel_info *pinfo = mipi_dsi_get_drvdata(dsi);
 
 	drm_panel_remove(&pinfo->panel);
+}
+
+/* Shutdown blanks with the power cut. */
+static void nt36536_shutdown(struct mipi_dsi_device *dsi)
+{
+	struct panel_info *pinfo = mipi_dsi_get_drvdata(dsi);
+
+	pinfo->shutting_down = true;
 }
 
 static int nt36536_get_modes(struct drm_panel *panel,
@@ -554,6 +576,7 @@ MODULE_DEVICE_TABLE(of, nt36536_of_match);
 static struct mipi_dsi_driver nt36536_driver = {
 	.probe = nt36536_probe,
 	.remove = nt36536_remove,
+	.shutdown = nt36536_shutdown,
 	.driver = {
 		.name = "panel-oneplus-iceland-nt36536",
 		.of_match_table = nt36536_of_match,
