@@ -1184,7 +1184,7 @@
 		dovdd-supply = <&vreg_l2f_1p8>;
 
 		orientation = <1>;
-		rotation = <90>;
+		rotation = <0>;
 
 		pinctrl-0 = <&cam_main_mclk_default>, <&cam_main_reset_default>;
 		pinctrl-names = "default";
@@ -1213,7 +1213,7 @@
 		dovdd-supply = <&vreg_l2f_1p8>;
 
 		orientation = <0>;
-		rotation = <90>;
+		rotation = <0>;
 
 		pinctrl-0 = <&cam_front_mclk_default>, <&cam_front_reset_default>;
 		pinctrl-names = "default";
