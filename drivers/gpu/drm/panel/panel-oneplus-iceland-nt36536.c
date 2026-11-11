@@ -7,7 +7,6 @@
 
 #include <linux/backlight.h>
 #include <linux/delay.h>
-#include <linux/fb.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -36,15 +35,6 @@ struct panel_info {
 
 	struct gpio_desc *reset_gpio;
 	struct regulator_bulk_data supplies[3];
-
-	/*
-	 * Until the first prepare the panel shows the bootloader's picture,
-	 * lit. Once the boot framebuffer lets go of the display the video
-	 * stream stops, and the panel would show its backlight alone, white,
-	 * until this host's first frame.
-	 */
-	struct notifier_block fb_nb;
-	bool splash;
 };
 
 struct panel_desc {
@@ -330,29 +320,10 @@ static void nt36536_reset(struct panel_info *pinfo)
 	usleep_range(10000, 11000);
 }
 
-static int nt36536_fb_event(struct notifier_block *nb, unsigned long event, void *data)
-{
-	struct panel_info *pinfo = container_of(nb, struct panel_info, fb_nb);
-
-	if (event == FB_EVENT_FB_UNREGISTERED && pinfo->splash)
-		backlight_disable(pinfo->panel.backlight);
-
-	return NOTIFY_DONE;
-}
-
-static void nt36536_fb_unregister(void *data)
-{
-	struct panel_info *pinfo = data;
-
-	fb_unregister_client(&pinfo->fb_nb);
-}
-
 static int nt36536_prepare(struct drm_panel *panel)
 {
 	struct panel_info *pinfo = to_panel_info(panel);
 	int ret;
-
-	pinfo->splash = false;
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
 	if (ret < 0) {
@@ -519,14 +490,6 @@ static int nt36536_probe(struct mipi_dsi_device *dsi)
 	ret = drm_panel_of_backlight(&pinfo->panel);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to get backlight\n");
-
-	pinfo->splash = true;
-	pinfo->fb_nb.notifier_call = nt36536_fb_event;
-	ret = fb_register_client(&pinfo->fb_nb);
-	if (!ret)
-		ret = devm_add_action_or_reset(dev, nt36536_fb_unregister, pinfo);
-	if (ret)
-		return ret;
 
 	drm_panel_add(&pinfo->panel);
 
