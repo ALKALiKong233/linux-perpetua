@@ -321,10 +321,8 @@ static struct panel_desc iceland_csot_desc = {
 	.is_dual_dsi = true,
 	.dsc = {
 		.dsc_version_major = 0x1,
-		/* Downstream uses DSC v1.2, but it is slightly broken on mainline, causes slice decode errors in some UI and complex or random pixel images.
-		 * DSC v1.2 has much less DSC glitches with 10bpc and 10bpp
-		 */
-		.dsc_version_minor = 0x1,
+		/* As the bootloader and the stock kernel run the panel. */
+		.dsc_version_minor = 0x2,
 		.slice_height = 20,
 		.slice_width = 848,
 		.slice_count = 2,
