@@ -54,8 +54,10 @@
 		/*
 		 * The init_boot every phone shares carries the boot userspace. The
 		 * Bluetooth options start the Peri with its factory RAM patch and NVM.
+		 * The firmware offers PSCI system suspend but returns from it at
+		 * once, so the tablet sleeps in s2idle.
 		 */
-		bootargs = "rdinit=/init console=tty0 panic=0 loglevel=7 log_buf_len=2M bootconfig hci_uart.pad4_peri_probe=1 hci_uart.pad4_peri_load_fw=1 btqca.pad4_factory_nvm=1";
+		bootargs = "rdinit=/init console=tty0 panic=0 loglevel=7 log_buf_len=2M bootconfig hci_uart.pad4_peri_probe=1 hci_uart.pad4_peri_load_fw=1 btqca.pad4_factory_nvm=1 mem_sleep_default=s2idle";
 
 		fdt-handoff {
 			stock-compatible = "qcom,canoe";
