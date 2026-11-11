@@ -1162,6 +1162,34 @@ static void arm_smmu_master_install_s2crs(struct arm_smmu_master_cfg *cfg,
 	}
 }
 
+/*
+ * What the firmware has a device read at its own address, the memory a
+ * bootloader's picture is scanned out of, is read without a pause: a domain
+ * a driver made gets it mapped, as the default domain has it, before the
+ * device's streams switch over.
+ */
+static int arm_smmu_map_direct_regions(struct iommu_domain *domain,
+				       struct device *dev)
+{
+	struct iommu_resv_region *region;
+	LIST_HEAD(regions);
+	int ret = 0;
+
+	iommu_get_resv_regions(dev, &regions);
+	list_for_each_entry(region, &regions, list) {
+		if (region->type != IOMMU_RESV_DIRECT)
+			continue;
+
+		ret = iommu_map(domain, region->start, region->start,
+				region->length, region->prot, GFP_KERNEL);
+		if (ret)
+			break;
+	}
+	iommu_put_resv_regions(dev, &regions);
+
+	return ret;
+}
+
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 			       struct iommu_domain *old)
 {
@@ -1200,6 +1228,12 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	if (smmu_domain->smmu != smmu) {
 		ret = -EINVAL;
 		goto rpm_put;
+	}
+
+	if (domain->type == IOMMU_DOMAIN_UNMANAGED) {
+		ret = arm_smmu_map_direct_regions(domain, dev);
+		if (ret)
+			goto rpm_put;
 	}
 
 	/* Looks ok, so add the device to the domain */
