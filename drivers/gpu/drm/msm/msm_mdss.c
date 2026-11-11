@@ -47,6 +47,11 @@ struct msm_mdss {
 	struct icc_path *reg_bus_path;
 	/* The core reset, waiting for msm_mdss_takeover(). */
 	struct reset_control *takeover_reset;
+	/*
+	 * The power domains of a node that lists more than one: the driver
+	 * switches them itself, on in the order listed and off in reverse.
+	 */
+	struct dev_pm_domain_list *pd_list;
 };
 
 static int msm_mdss_parse_data_bus_icc_path(struct device *dev,
@@ -253,9 +258,24 @@ static void msm_mdss_setup_ubwc(struct msm_mdss *msm_mdss)
 	/* else UBWC 1.0 or none, no params to program */
 }
 
+static void msm_mdss_power_domains_off(struct msm_mdss *msm_mdss, int num)
+{
+	while (--num >= 0)
+		pm_runtime_put_sync(msm_mdss->pd_list->pd_devs[num]);
+}
+
 static int msm_mdss_enable(struct msm_mdss *msm_mdss)
 {
 	int ret, i;
+
+	for (i = 0; msm_mdss->pd_list && i < msm_mdss->pd_list->num_pds; i++) {
+		ret = pm_runtime_resume_and_get(msm_mdss->pd_list->pd_devs[i]);
+		if (ret) {
+			dev_err(msm_mdss->dev, "power domain %d failed, ret:%d\n", i, ret);
+			msm_mdss_power_domains_off(msm_mdss, i);
+			return ret;
+		}
+	}
 
 	/*
 	 * Several components have AXI clocks that can only be turned on if
@@ -279,6 +299,8 @@ static int msm_mdss_enable(struct msm_mdss *msm_mdss)
 	ret = clk_bulk_prepare_enable(msm_mdss->num_clocks, msm_mdss->clocks);
 	if (ret) {
 		dev_err(msm_mdss->dev, "clock enable failed, ret:%d\n", ret);
+		if (msm_mdss->pd_list)
+			msm_mdss_power_domains_off(msm_mdss, msm_mdss->pd_list->num_pds);
 		return ret;
 	}
 
@@ -298,6 +320,9 @@ static int msm_mdss_disable(struct msm_mdss *msm_mdss)
 
 	if (msm_mdss->reg_bus_path)
 		icc_set_bw(msm_mdss->reg_bus_path, 0, 0);
+
+	if (msm_mdss->pd_list)
+		msm_mdss_power_domains_off(msm_mdss, msm_mdss->pd_list->num_pds);
 
 	return 0;
 }
@@ -434,6 +459,18 @@ static struct msm_mdss *msm_mdss_init(struct platform_device *pdev, bool is_mdp5
 	msm_mdss->is_mdp5 = is_mdp5;
 
 	msm_mdss->dev = &pdev->dev;
+
+	/* One power domain is the bus's to attach, and runtime PM's to switch. */
+	if (of_count_phandle_with_args(pdev->dev.of_node, "power-domains",
+				       "#power-domain-cells") > 1) {
+		static const struct dev_pm_domain_attach_data pd_data = {
+			.pd_flags = PD_FLAG_NO_DEV_LINK,
+		};
+
+		ret = devm_pm_domain_attach_list(&pdev->dev, &pd_data, &msm_mdss->pd_list);
+		if (ret < 0)
+			return ERR_PTR(ret);
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -634,6 +671,19 @@ void msm_mdss_takeover(struct device *dev)
 	msm_mdss->takeover_reset = NULL;
 
 	msm_mdss_setup_ubwc(msm_mdss);
+}
+
+/*
+ * True for a display handed over as the bootloader runs it: its node names
+ * the memory the bootloader's picture is scanned out of. `dev` is the display
+ * controller, an MDSS child.
+ */
+bool msm_mdss_boot_display(struct device *dev)
+{
+	if (!dev->parent || dev->parent->driver != &mdss_platform_driver.driver)
+		return false;
+
+	return of_property_present(dev->parent->of_node, "memory-region");
 }
 
 void __init msm_mdss_register(void)

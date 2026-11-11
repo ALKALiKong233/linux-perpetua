@@ -419,10 +419,12 @@ static inline void msm_dpu_unregister(void) {}
 void msm_mdss_register(void);
 void msm_mdss_unregister(void);
 void msm_mdss_takeover(struct device *dev);
+bool msm_mdss_boot_display(struct device *dev);
 #else
 static inline void msm_mdss_register(void) {}
 static inline void msm_mdss_unregister(void) {}
 static inline void msm_mdss_takeover(struct device *dev) {}
+static inline bool msm_mdss_boot_display(struct device *dev) { return false; }
 #endif
 
 #ifdef CONFIG_DEBUG_FS
