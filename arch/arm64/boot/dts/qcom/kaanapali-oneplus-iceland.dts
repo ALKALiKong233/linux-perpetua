@@ -45,6 +45,10 @@
 	};
 
 	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
 		/*
 		 * The init_boot every phone shares carries the boot userspace. The
 		 * Bluetooth options start the Peri with its factory RAM patch and NVM.
@@ -56,6 +60,36 @@
 			stock-model = "Qualcomm Technologies, Inc. Canoe MTP,iceland-O IN";
 			stock-bootargs = "oplusboot.prjname=25978";
 			keep-initrd;
+		};
+
+		/* Bootloader splash, left running by ABL (NT36536, two video-mode links) */
+		framebuffer: framebuffer@fc800000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xfc800000 0x0 (3392 * 2400 * 4)>;
+			width = <3392>;
+			height = <2400>;
+			stride = <(3392 * 4)>;
+			format = "a8r8g8b8";
+
+			/*
+			 * Held until msm takes over: the boot clean-up of unused
+			 * clocks and power domains ran before msm claimed them,
+			 * and the panel, without its video stream, showed its
+			 * backlight alone: a white screen after the logo.
+			 */
+			clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
+				 <&dispcc DISP_CC_MDSS_AHB_CLK>,
+				 <&dispcc DISP_CC_MDSS_MDP_CLK>,
+				 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
+				 <&dispcc DISP_CC_MDSS_ESC0_CLK>,
+				 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
+				 <&dispcc DISP_CC_MDSS_BYTE0_INTF_CLK>,
+				 <&dispcc DISP_CC_MDSS_PCLK0_CLK>,
+				 <&dispcc DISP_CC_MDSS_ESC1_CLK>,
+				 <&dispcc DISP_CC_MDSS_BYTE1_CLK>,
+				 <&dispcc DISP_CC_MDSS_BYTE1_INTF_CLK>,
+				 <&dispcc DISP_CC_MDSS_PCLK1_CLK>;
+			power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>;
 		};
 	};
 
@@ -179,6 +213,12 @@
 	};
 
 	reserved-memory {
+		/* The splash the bootloader scans out, splash_region downstream. */
+		cont_splash_mem: cont-splash@fc800000 {
+			reg = <0x0 0xfc800000 0x0 0x2b00000>;
+			no-map;
+		};
+
 		gunyah_hyp_mem: gunyah-hyp@80000000 {
 			reg = <0x0 0x80000000 0x0 0xe00000>;
 			no-map;
