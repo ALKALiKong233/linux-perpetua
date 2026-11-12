@@ -207,6 +207,9 @@ static void thermal_of_parameters_init(struct device_node *np,
 	if (!of_property_read_u32(np, "sustainable-power", &prop))
 		tzp->sustainable_power = prop;
 
+	/* The governor the zone's trips and sustainable power are tuned for */
+	of_property_read_string(np, "thermal-governor", &tzp->governor_name);
+
 	/*
 	 * For now, the thermal framework supports only one sensor per
 	 * thermal zone. Thus, we are considering only the first two

@@ -122,6 +122,15 @@ patternProperties:
           sustainable power of a 4-inch phone is typically 2000mW, while on a
           10-inch tablet is around 4500mW.
 
+      thermal-governor:
+        $ref: /schemas/types.yaml#/definitions/string
+        enum: [ step_wise, power_allocator, fair_share, bang_bang, user_space ]
+        description:
+          The thermal governor the zone's trips and sustainable power are
+          tuned for, such as power_allocator for a zone with a switch-on
+          and a control trip. Without it the zone uses the kernel's default
+          governor.
+
       trips:
         type: object
         description:
