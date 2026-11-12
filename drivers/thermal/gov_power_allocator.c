@@ -51,15 +51,19 @@ static inline s64 div_frac(s64 x, s64 y)
  * @req_power:		requested power value (not weighted)
  * @max_power:		max allocatable power for this actor
  * @granted_power:	granted power for this actor
- * @extra_actor_power:	extra power that this actor can receive
- * @weighted_req_power:	weighted requested power as input to IPA
+ * @weight:		this actor's share of the budget, relative to the others
+ * @throttled:		this zone holds the actor below its maximum
+ * @unlimited:		the actor needs less than its share and runs unthrottled
+ * @settled:		the actor's grant is final in this split
  */
 struct power_actor {
 	u32 req_power;
 	u32 max_power;
 	u32 granted_power;
-	u32 extra_actor_power;
-	u32 weighted_req_power;
+	u32 weight;
+	bool throttled;
+	bool unlimited;
+	bool settled;
 };
 
 /**
@@ -89,6 +93,8 @@ struct power_allocator_params {
 	s64 err_integral;
 	s32 prev_err;
 	u32 sustainable_power;
+	bool all_released;
+	bool all_throttled;
 	const struct thermal_trip *trip_switch_on;
 	const struct thermal_trip *trip_max;
 	int total_weight;
@@ -265,8 +271,15 @@ static u32 pid_controller(struct thermal_zone_device *tz,
 
 	if (err < int_to_frac(tz->tzp->integral_cutoff)) {
 		s64 i_next = i + mul_frac(tz->tzp->k_i, err);
+		/*
+		 * Integrate only while the actors can still move the way the
+		 * error asks: an integral that grows while every actor runs
+		 * unthrottled, or shrinks while every actor is fully
+		 * throttled, only delays the next correction.
+		 */
+		bool saturated = err < 0 ? params->all_throttled : params->all_released;
 
-		if (abs(i_next) < max_power_frac) {
+		if (!saturated && abs(i_next) < max_power_frac) {
 			i = i_next;
 			params->err_integral += err;
 		}
@@ -321,6 +334,11 @@ power_actor_set_power(struct thermal_cooling_device *cdev,
 	if (ret)
 		return ret;
 
+	/* One state a cycle, so that a budget change never jolts a clock */
+	if (instance->target != THERMAL_NO_TARGET)
+		state = clamp_val(state, instance->target ? instance->target - 1 : 0,
+				  instance->target + 1);
+
 	instance->target = clamp_val(state, instance->lower, instance->upper);
 
 	thermal_cdev_update_nocheck(cdev);
@@ -332,74 +350,56 @@ power_actor_set_power(struct thermal_cooling_device *cdev,
  * divvy_up_power() - divvy the allocated power between the actors
  * @power:		buffer for all power actors internal power information
  * @num_actors:		number of power actors in this thermal zone
- * @total_req_power:	sum of all weighted requested power for all actors
  * @power_range:	total allocated power
  *
- * This function divides the total allocated power (@power_range)
- * fairly between the actors.  It first tries to give each actor a
- * share of the @power_range according to how much power it requested
- * compared to the rest of the actors.  For example, if only one actor
- * requests power, then it receives all the @power_range.  If
- * three actors each requests 1mW, each receives a third of the
- * @power_range.
- *
- * If any actor received more than their maximum power, then that
- * surplus is re-divvied among the actors based on how far they are
- * from their respective maximums.
+ * Each actor gets its weight's share of @power_range, as Pixel's thermal HAL
+ * splits its budget. A throttled actor gets its whole share whatever it
+ * draws now, since what it draws is what the throttle lets it draw: shares
+ * by request would keep a throttled actor throttled. An unthrottled actor
+ * that needs less than its share, and an actor whose share is over its
+ * maximum, keep what they need and leave the rest to the others.
  */
 static void divvy_up_power(struct power_actor *power, int num_actors,
-			   u32 total_req_power, u32 power_range)
+			   u32 power_range)
 {
-	u32 capped_extra_power = 0;
-	u32 extra_power = 0;
+	u32 remaining = power_range, total_weight = 0;
+	bool settled;
 	int i;
 
-	if (!total_req_power) {
-		/*
-		 * Nobody requested anything, just give everybody
-		 * the maximum power
-		 */
-		for (i = 0; i < num_actors; i++) {
+	for (i = 0; i < num_actors; i++)
+		total_weight += power[i].weight;
+
+	do {
+		settled = false;
+
+		for (i = 0; i < num_actors && total_weight; i++) {
 			struct power_actor *pa = &power[i];
+			u32 share, need;
 
-			pa->granted_power = pa->max_power;
+			if (pa->settled)
+				continue;
+
+			share = div_u64((u64)remaining * pa->weight, total_weight);
+			need = pa->throttled ? pa->max_power :
+					       min(pa->req_power, pa->max_power);
+			if (share < need)
+				continue;
+
+			pa->granted_power = need;
+			pa->unlimited = !pa->throttled && need < pa->max_power;
+			pa->settled = true;
+			remaining -= need;
+			total_weight -= pa->weight;
+			settled = true;
 		}
-
-		return;
-	}
+	} while (settled);
 
 	for (i = 0; i < num_actors; i++) {
 		struct power_actor *pa = &power[i];
-		u64 req_range = (u64)pa->weighted_req_power * power_range;
 
-		pa->granted_power = DIV_ROUND_CLOSEST_ULL(req_range,
-							  total_req_power);
-
-		if (pa->granted_power > pa->max_power) {
-			extra_power += pa->granted_power - pa->max_power;
-			pa->granted_power = pa->max_power;
-		}
-
-		pa->extra_actor_power = pa->max_power - pa->granted_power;
-		capped_extra_power += pa->extra_actor_power;
-	}
-
-	if (!extra_power || !capped_extra_power)
-		return;
-
-	/*
-	 * Re-divvy the reclaimed extra among actors based on
-	 * how far they are from the max
-	 */
-	extra_power = min(extra_power, capped_extra_power);
-
-	for (i = 0; i < num_actors; i++) {
-		struct power_actor *pa = &power[i];
-		u64 extra_range = pa->extra_actor_power;
-
-		extra_range *= extra_power;
-		pa->granted_power += DIV_ROUND_CLOSEST_ULL(extra_range,
-						capped_extra_power);
+		if (!pa->settled && total_weight)
+			pa->granted_power = div_u64((u64)remaining * pa->weight,
+						    total_weight);
 	}
 }
 
@@ -411,11 +411,10 @@ static void allocate_power(struct thermal_zone_device *tz, int control_temp)
 	struct power_actor *power = params->power;
 	struct thermal_cooling_device *cdev;
 	struct thermal_instance *instance;
-	u32 total_weighted_req_power = 0;
 	u32 max_allocatable_power = 0;
 	u32 total_granted_power = 0;
 	u32 total_req_power = 0;
-	u32 power_range, weight;
+	u32 power_range;
 	int i = 0, ret;
 
 	if (!num_actors)
@@ -423,6 +422,8 @@ static void allocate_power(struct thermal_zone_device *tz, int control_temp)
 
 	/* Clean all buffers for new power estimations */
 	memset(power, 0, params->buffer_size);
+	params->all_released = true;
+	params->all_throttled = true;
 
 	list_for_each_entry(instance, &td->thermal_instances, trip_node) {
 		struct power_actor *pa = &power[i];
@@ -436,29 +437,28 @@ static void allocate_power(struct thermal_zone_device *tz, int control_temp)
 		if (ret)
 			continue;
 
-		if (!params->total_weight)
-			weight = 1 << FRAC_BITS;
-		else
-			weight = instance->weight;
-
-		pa->weighted_req_power = frac_to_int(weight * pa->req_power);
+		pa->weight = params->total_weight ? instance->weight : 1;
 
 		ret = cdev->ops->state2power(cdev, instance->lower,
 					     &pa->max_power);
 		if (ret)
 			continue;
 
+		pa->throttled = instance->target != THERMAL_NO_TARGET &&
+				instance->target > instance->lower;
+		params->all_released &= !pa->throttled;
+		params->all_throttled &= instance->target != THERMAL_NO_TARGET &&
+					 instance->target >= instance->upper;
+
 		total_req_power += pa->req_power;
 		max_allocatable_power += pa->max_power;
-		total_weighted_req_power += pa->weighted_req_power;
 
 		i++;
 	}
 
 	power_range = pid_controller(tz, control_temp, max_allocatable_power);
 
-	divvy_up_power(power, num_actors, total_weighted_req_power,
-		       power_range);
+	divvy_up_power(power, num_actors, power_range);
 
 	i = 0;
 	list_for_each_entry(instance, &td->thermal_instances, trip_node) {
@@ -468,7 +468,7 @@ static void allocate_power(struct thermal_zone_device *tz, int control_temp)
 			continue;
 
 		power_actor_set_power(instance->cdev, instance,
-				      pa->granted_power);
+				      pa->unlimited ? pa->max_power : pa->granted_power);
 		total_granted_power += pa->granted_power;
 
 		trace_thermal_power_actor(tz, i, pa->req_power,
