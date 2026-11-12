@@ -230,18 +230,7 @@ static int iceland_csot_init_sequence(struct panel_info *pinfo)
 }
 
 static const struct drm_display_mode iceland_csot_modes[] = {
-	{
-		/* 144Hz */
-		.clock = (3392 + 64 + 32 + 40) * (2400 + 26 + 2 + 52) * 144 / 1000,
-		.hdisplay = 3392,
-		.hsync_start = 3392 + 64,
-		.hsync_end = 3392 + 64 + 32,
-		.htotal = 3392 + 64 + 32 + 40,
-		.vdisplay = 2400,
-		.vsync_start = 2400 + 26,
-		.vsync_end = 2400 + 26 + 2,
-		.vtotal = 2400 + 26 + 2 + 52,
-	},
+	/* First is preferred: the bootloader runs 120 Hz, the stock default. */
 	{
 		/* 120Hz */
 		.clock = (3392 + 100 + 64 + 104) * (2400 + 26 + 2 + 272) * 120 / 1000,
@@ -253,6 +242,18 @@ static const struct drm_display_mode iceland_csot_modes[] = {
 		.vsync_start = 2400 + 26,
 		.vsync_end = 2400 + 26 + 2,
 		.vtotal = 2400 + 26 + 2 + 272,
+	},
+	{
+		/* 144Hz */
+		.clock = (3392 + 64 + 32 + 40) * (2400 + 26 + 2 + 52) * 144 / 1000,
+		.hdisplay = 3392,
+		.hsync_start = 3392 + 64,
+		.hsync_end = 3392 + 64 + 32,
+		.htotal = 3392 + 64 + 32 + 40,
+		.vdisplay = 2400,
+		.vsync_start = 2400 + 26,
+		.vsync_end = 2400 + 26 + 2,
+		.vtotal = 2400 + 26 + 2 + 52,
 	},
 	{
 		/* 90Hz */
