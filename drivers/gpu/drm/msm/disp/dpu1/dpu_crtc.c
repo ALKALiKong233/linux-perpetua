@@ -1609,8 +1609,14 @@ static enum drm_mode_status dpu_crtc_mode_valid(struct drm_crtc *crtc,
 	    mode->hdisplay > dpu_kms->catalog->caps->max_mixer_width)
 		return MODE_BAD_HVALUE;
 
-	adjusted_mode_clk = dpu_core_perf_adjusted_mode_clk(mode->clock,
-							    dpu_kms->perf.perf_cfg);
+	/*
+	 * The core processes the active pixels of every line; horizontal
+	 * blanking belongs to the interface. This is the rate the core clock
+	 * is set for, see _dpu_core_perf_calc_clk().
+	 */
+	adjusted_mode_clk = dpu_core_perf_adjusted_mode_clk(
+			(u64)mode->vtotal * mode->hdisplay * drm_mode_vrefresh(mode),
+			dpu_kms->perf.perf_cfg);
 
 	if (dpu_kms->catalog->caps->has_3d_merge)
 		adjusted_mode_clk /= 2;
@@ -1619,7 +1625,7 @@ static enum drm_mode_status dpu_crtc_mode_valid(struct drm_crtc *crtc,
 	 * The given mode, adjusted for the perf clock factor, should not exceed
 	 * the max core clock rate
 	 */
-	if (dpu_kms->perf.max_core_clk_rate < adjusted_mode_clk * 1000)
+	if (dpu_kms->perf.max_core_clk_rate < adjusted_mode_clk)
 		return MODE_CLOCK_HIGH;
 
 	/*
