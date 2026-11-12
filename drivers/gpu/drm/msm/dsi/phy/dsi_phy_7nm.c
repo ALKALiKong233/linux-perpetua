@@ -1053,11 +1053,19 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 		return 0;
 	}
 
-	/* The splash ends here: the PHY is configured with the PLL off. */
+	/*
+	 * The splash ends here: the PHY is configured with the PLL off. The
+	 * bootloader's PLL was never counted as prepared: it is counted for
+	 * itself and the PHY it clocks, so that stopping it shuts it down.
+	 */
 	if (pll->handover) {
 		pll->handover = false;
-		if (dsi_phy_hw_v4_0_is_pll_on(phy))
+		if (dsi_phy_hw_v4_0_is_pll_on(phy)) {
+			dsi_pll_7nm_take_bias(pll, 1);
+			if (pll->slave)
+				dsi_pll_7nm_take_bias(pll->slave, 1);
 			dsi_pll_7nm_stop(pll);
+		}
 	}
 
 	if (dsi_phy_hw_v4_0_is_pll_on(phy))
