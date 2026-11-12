@@ -395,11 +395,14 @@
 	/*
 	 * The tablet throttles on how hot it is, not on how hot the SoC is.
 	 * skin-thermal follows the skin thermistor stock throttles on (its
-	 * sys-therm-2, thermal HAL stages from 48 to 61 °C): from 50 °C it
-	 * steps the CPU clusters and the GPU down, one state a second, and
-	 * lets them back up below 48 °C. xo-thermal keeps stock's kernel
-	 * limits on the XO thermistor beside the SoC: full throttle from
-	 * 78 °C, power off at 90 °C. board-thermal only reports.
+	 * sys-therm-2, thermal HAL stages from 48 to 61 °C), which trails the
+	 * SoC by 30 to 60 seconds. The power allocator holds it at 55 °C: from
+	 * 50 °C it gives the CPU clusters and the GPU a power budget that it
+	 * moves slowly, instead of stepping their clocks up and down. Its
+	 * power models are the CPUs' own and the GPU's opp-microwatt.
+	 * xo-thermal keeps stock's kernel limits on the XO thermistor beside
+	 * the SoC: full throttle from 78 °C, power off at 90 °C. board-thermal
+	 * only reports.
 	 */
 	thermal-zones {
 		board-thermal {
@@ -409,12 +412,20 @@
 		skin-thermal {
 			polling-delay-passive = <1000>;
 			polling-delay = <5000>;
+			thermal-governor = "power_allocator";
+			sustainable-power = <3500>;
 
 			thermal-sensors = <&skin_temp>;
 
 			trips {
-				skin_passive: skin-passive {
+				skin-switch-on {
 					temperature = <50000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				skin_control: skin-control {
+					temperature = <55000>;
 					hysteresis = <2000>;
 					type = "passive";
 				};
@@ -428,7 +439,7 @@
 
 			cooling-maps {
 				map0 {
-					trip = <&skin_passive>;
+					trip = <&skin_control>;
 					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
 							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
 							 <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
@@ -1134,6 +1145,82 @@
 &csiphy5_out_port {
 	csiphy5_out_ep: endpoint {
 		remote-endpoint = <&camss_csiphy5_inep>;
+	};
+};
+
+/*
+ * GPU power at each clock, for the power allocator: an ALU-bound compute
+ * load on this tablet, the draw with it running less the draw without,
+ * fitted to P = 1.18 mW/MHz * f + 1.06e-6 mW/MHz^3 * f^3, within 0.1 W
+ * of each reading.
+ */
+&gpu_opp_table {
+	opp-160000000 {
+		opp-microwatt = <193000>;
+	};
+
+	opp-191000000 {
+		opp-microwatt = <232000>;
+	};
+
+	opp-222000000 {
+		opp-microwatt = <273000>;
+	};
+
+	opp-282000000 {
+		opp-microwatt = <356000>;
+	};
+
+	opp-342000000 {
+		opp-microwatt = <445000>;
+	};
+
+	opp-382000000 {
+		opp-microwatt = <508000>;
+	};
+
+	opp-422000000 {
+		opp-microwatt = <576000>;
+	};
+
+	opp-461000000 {
+		opp-microwatt = <646000>;
+	};
+
+	opp-500000000 {
+		opp-microwatt = <721000>;
+	};
+
+	opp-578000000 {
+		opp-microwatt = <884000>;
+	};
+
+	opp-646000000 {
+		opp-microwatt = <1045000>;
+	};
+
+	opp-726000000 {
+		opp-microwatt = <1259000>;
+	};
+
+	opp-826000000 {
+		opp-microwatt = <1568000>;
+	};
+
+	opp-902000000 {
+		opp-microwatt = <1837000>;
+	};
+
+	opp-1000000000 {
+		opp-microwatt = <2234000>;
+	};
+
+	opp-1050000000 {
+		opp-microwatt = <2460000>;
+	};
+
+	opp-1200000000 {
+		opp-microwatt = <3240000>;
 	};
 };
 
