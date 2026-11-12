@@ -379,19 +379,21 @@
 	};
 
 	/*
-	 * The case: the skin thermistor, which trails the SoC by 30 to 60
-	 * seconds, with the board and the battery connector, which trail the
-	 * tablet's heat, as stock phones estimate a surface no thermistor
-	 * touches (Motorola weighs the battery 60 % on roadstr). Not yet
-	 * checked against a thermometer on the case.
+	 * The case, as stock phones estimate a surface no thermistor touches:
+	 * mostly the board and subboard thermistors, away from the heat
+	 * sources, which warm only as the whole tablet does, and a little of
+	 * the skin thermistor beside the SoC, which trails it by 30 to 60
+	 * seconds. The battery connector thermistor stays out: charging
+	 * current heats it, to 44 °C with the cell at 37 °C. Not yet checked
+	 * against a thermometer on the case.
 	 */
 	case_temp: thermal-sensor-case {
 		compatible = "weighted-thermal-sensor";
 		#thermal-sensor-cells = <0>;
 		io-channels = <&pmk8850_vadc 0x144>,
 			      <&pmk8850_vadc 0x148>,
-			      <&pmk8850_vadc 0x2744>;
-		io-channel-weights = <30 30 40>;
+			      <&pmk8850_vadc 0x274d>;
+		io-channel-weights = <20 40 40>;
 	};
 
 	skin_temp: thermal-sensor-skin {
