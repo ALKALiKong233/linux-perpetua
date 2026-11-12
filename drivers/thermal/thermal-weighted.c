@@ -8,7 +8,14 @@
  *
  * The inputs are looked up by zone name on each read, so a zone that its
  * driver registers again, for example after a module reload, is followed.
+ *
+ * Inputs can also be IIO temperature channels, read directly. A zone read
+ * from inside this zone's read takes the zone list lock under this zone's
+ * lock, the reverse of cooling device registration; a channel read takes
+ * no thermal lock.
  */
+
+#include <linux/iio/consumer.h>
 
 #include <linux/err.h>
 #include <linux/math64.h>
@@ -23,9 +30,16 @@ struct weighted_thermal_input {
 	u32 weight;
 };
 
+struct weighted_thermal_channel {
+	struct iio_channel *channel;
+	u32 weight;
+};
+
 struct weighted_thermal_sensor {
 	struct weighted_thermal_input *inputs;
 	unsigned int num_inputs;
+	struct weighted_thermal_channel *channels;
+	unsigned int num_channels;
 	u32 total_weight;
 };
 
@@ -52,6 +66,17 @@ static int weighted_thermal_get_temp(struct thermal_zone_device *tz, int *temp)
 		sum += (s64)input_temp * input->weight;
 	}
 
+	for (i = 0; i < sensor->num_channels; i++) {
+		const struct weighted_thermal_channel *channel = &sensor->channels[i];
+		int channel_temp, ret;
+
+		ret = iio_read_channel_processed(channel->channel, &channel_temp);
+		if (ret < 0)
+			return ret;
+
+		sum += (s64)channel_temp * channel->weight;
+	}
+
 	*temp = div_s64(sum, sensor->total_weight);
 
 	return 0;
@@ -60,6 +85,48 @@ static int weighted_thermal_get_temp(struct thermal_zone_device *tz, int *temp)
 static const struct thermal_zone_device_ops weighted_thermal_ops = {
 	.get_temp = weighted_thermal_get_temp,
 };
+
+static int weighted_thermal_get_channels(struct device *dev,
+					 struct weighted_thermal_sensor *sensor)
+{
+	struct device_node *np = dev->of_node;
+	struct iio_channel *channels;
+	int count, i, ret;
+
+	count = of_property_count_u32_elems(np, "io-channel-weights");
+	if (count <= 0)
+		return 0;
+
+	channels = devm_iio_channel_get_all(dev);
+	if (IS_ERR(channels))
+		return dev_err_probe(dev, PTR_ERR(channels), "no IIO channels\n");
+
+	for (i = 0; channels[i].indio_dev; i++)
+		;
+	if (i != count)
+		return dev_err_probe(dev, -EINVAL,
+				     "need one weight for each IIO channel\n");
+
+	sensor->channels = devm_kcalloc(dev, count, sizeof(*sensor->channels), GFP_KERNEL);
+	if (!sensor->channels)
+		return -ENOMEM;
+
+	for (i = 0; i < count; i++) {
+		struct weighted_thermal_channel *channel = &sensor->channels[i];
+
+		channel->channel = &channels[i];
+		ret = of_property_read_u32_index(np, "io-channel-weights", i,
+						 &channel->weight);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to read channel weight %d\n", i);
+
+		sensor->total_weight += channel->weight;
+	}
+
+	sensor->num_channels = count;
+
+	return 0;
+}
 
 static int weighted_thermal_probe(struct platform_device *pdev)
 {
@@ -73,11 +140,16 @@ static int weighted_thermal_probe(struct platform_device *pdev)
 	if (!sensor)
 		return -ENOMEM;
 
-	count = of_property_count_strings(np, "zone-names");
-	if (count <= 0)
-		return dev_err_probe(dev, -EINVAL, "no input zones\n");
+	ret = weighted_thermal_get_channels(dev, sensor);
+	if (ret)
+		return ret;
 
-	if (of_property_count_u32_elems(np, "weights") != count)
+	count = of_property_count_strings(np, "zone-names");
+	if (count <= 0 && !sensor->num_channels)
+		return dev_err_probe(dev, -EINVAL, "no input zones or channels\n");
+	count = max(count, 0);
+
+	if (count && of_property_count_u32_elems(np, "weights") != count)
 		return dev_err_probe(dev, -EINVAL,
 				     "need one weight for each input zone\n");
 
@@ -138,3 +210,4 @@ module_platform_driver(weighted_thermal_driver);
 
 MODULE_DESCRIPTION("Weighted average of thermal zones as a thermal sensor");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS("IIO_CONSUMER");

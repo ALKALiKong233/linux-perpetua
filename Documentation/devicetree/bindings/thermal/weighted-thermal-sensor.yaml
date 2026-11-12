@@ -11,9 +11,9 @@ maintainers:
 
 description:
   A thermal sensor whose temperature is a weighted average of other thermal
-  zones. Phones estimate the temperature of surfaces that carry no
-  thermistor, such as the back cover, this way and throttle charging and
-  performance on the estimate.
+  zones and IIO temperature channels. Phones estimate the temperature of
+  surfaces that carry no thermistor, such as the back cover, this way and
+  throttle charging and performance on the estimate.
 
 allOf:
   - $ref: thermal-sensor.yaml#
@@ -37,11 +37,28 @@ properties:
       weights need not add up to any particular total.
     minItems: 1
 
+  io-channels:
+    description:
+      IIO temperature channels to average with the zones. A channel is read
+      directly, while a zone is read from inside this zone's own read.
+    minItems: 1
+
+  io-channel-weights:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    description: Relative weight of each channel in io-channels, in the same order.
+    minItems: 1
+
 required:
   - compatible
   - '#thermal-sensor-cells'
-  - zone-names
-  - weights
+
+anyOf:
+  - required: [ zone-names, weights ]
+  - required: [ io-channels, io-channel-weights ]
+
+dependentRequired:
+  zone-names: [ weights ]
+  io-channels: [ io-channel-weights ]
 
 unevaluatedProperties: false
 

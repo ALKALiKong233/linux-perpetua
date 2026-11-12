@@ -489,10 +489,11 @@ config GENERIC_ADC_THERMAL
 
 config THERMAL_WEIGHTED_SENSOR
 	tristate "Weighted average of thermal zones"
-	depends on THERMAL_OF
+	depends on THERMAL_OF && IIO
 	help
 	  This adds a thermal sensor whose temperature is a weighted average
-	  of other thermal zones, as described in the device tree. Phones use
+	  of other thermal zones and IIO temperature channels, as described in
+	  the device tree. Phones use
 	  such an estimate for surfaces that carry no thermistor, such as the
 	  back cover, and throttle charging on it.
 
