@@ -132,6 +132,32 @@ static int enable_phy(struct msm_dsi *msm_dsi,
 	return msm_dsi_phy_enable(msm_dsi->phy, &clk_req, shared_timings);
 }
 
+/*
+ * The bootloader's stream goes on only where every link of the display takes
+ * it over. Otherwise it ends at its source, the timing engine, and then on
+ * every link, before any link lets go of its clocks or its PLL stops: in a
+ * bonded pair the clock master's PLL clocks both links.
+ */
+static void dsi_mgr_settle_boot_stream(struct msm_dsi *msm_dsi, struct msm_dsi *other)
+{
+	struct msm_drm_private *priv = msm_dsi->dev->dev_private;
+	bool is_bonded_dsi = IS_BONDED_DSI();
+
+	if (!msm_dsi_host_holds_boot_stream(msm_dsi->host) &&
+	    !(other && msm_dsi_host_holds_boot_stream(other->host)))
+		return;
+
+	if (msm_dsi_host_boot_stream_fits(msm_dsi->host, is_bonded_dsi) &&
+	    (!other || msm_dsi_host_boot_stream_fits(other->host, is_bonded_dsi)))
+		return;
+
+	if (priv->kms->funcs->end_boot_stream)
+		priv->kms->funcs->end_boot_stream(priv->kms);
+	msm_dsi_host_end_boot_stream(msm_dsi->host);
+	if (other)
+		msm_dsi_host_end_boot_stream(other->host);
+}
+
 static int
 dsi_mgr_phy_enable(int id,
 		   struct msm_dsi_phy_shared_timings shared_timings[DSI_MAX])
@@ -148,6 +174,7 @@ dsi_mgr_phy_enable(int id,
 	 */
 	if (IS_BONDED_DSI() && mdsi && sdsi) {
 		if (!mdsi->phy_enabled && !sdsi->phy_enabled) {
+			dsi_mgr_settle_boot_stream(mdsi, sdsi);
 			msm_dsi_host_reset_phy(mdsi->host);
 			msm_dsi_host_reset_phy(sdsi->host);
 
@@ -163,6 +190,7 @@ dsi_mgr_phy_enable(int id,
 			}
 		}
 	} else {
+		dsi_mgr_settle_boot_stream(msm_dsi, NULL);
 		msm_dsi_host_reset_phy(msm_dsi->host);
 		ret = enable_phy(msm_dsi, &shared_timings[id]);
 		if (ret)

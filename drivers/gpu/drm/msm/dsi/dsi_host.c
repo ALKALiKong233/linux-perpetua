@@ -2266,6 +2266,36 @@ static bool dsi_boot_stream_fits(struct msm_dsi_host *msm_host)
 	       clk_get_rate(msm_host->pixel_clk) == msm_host->pixel_clk_rate;
 }
 
+bool msm_dsi_host_holds_boot_stream(struct mipi_dsi_host *host)
+{
+	return to_msm_dsi_host(host)->boot_stream;
+}
+
+/* Whether the coming power-on takes the bootloader's stream over. */
+bool msm_dsi_host_boot_stream_fits(struct mipi_dsi_host *host, bool is_bonded_dsi)
+{
+	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+
+	return msm_host->boot_stream &&
+	       !msm_host->cfg_hnd->ops->calc_clk_rate(msm_host, is_bonded_dsi) &&
+	       dsi_boot_stream_fits(msm_host);
+}
+
+/*
+ * With its source stopped, the controller stops sending the bootloader's
+ * stream and lets go of the link clocks: the link restarts at power-on.
+ */
+void msm_dsi_host_end_boot_stream(struct mipi_dsi_host *host)
+{
+	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+
+	if (!msm_host->boot_stream)
+		return;
+
+	dsi_ctrl_disable(msm_host);
+	msm_dsi_host_drop_boot_stream(host);
+}
+
 int msm_dsi_host_register(struct mipi_dsi_host *host)
 {
 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);

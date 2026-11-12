@@ -31,6 +31,11 @@ struct msm_kms_funcs {
 	 * hw_init goes on from it, false to have the display reset first.
 	 */
 	bool (*take_over)(struct msm_kms *kms);
+	/*
+	 * Optional: ends the stream the bootloader started at its timing
+	 * engines, before links that cannot take it over restart.
+	 */
+	void (*end_boot_stream)(struct msm_kms *kms);
 	/* irq handling: */
 	void (*irq_preinstall)(struct msm_kms *kms);
 	int (*irq_postinstall)(struct msm_kms *kms);

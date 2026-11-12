@@ -84,6 +84,9 @@ unsigned long msm_dsi_host_get_mode_flags(struct mipi_dsi_host *host);
 int msm_dsi_host_register(struct mipi_dsi_host *host);
 void msm_dsi_host_hold_boot_stream(struct mipi_dsi_host *host);
 void msm_dsi_host_drop_boot_stream(struct mipi_dsi_host *host);
+bool msm_dsi_host_holds_boot_stream(struct mipi_dsi_host *host);
+bool msm_dsi_host_boot_stream_fits(struct mipi_dsi_host *host, bool is_bonded_dsi);
+void msm_dsi_host_end_boot_stream(struct mipi_dsi_host *host);
 void msm_dsi_host_unregister(struct mipi_dsi_host *host);
 void msm_dsi_host_set_phy_mode(struct mipi_dsi_host *host,
 			struct msm_dsi_phy *src_phy);

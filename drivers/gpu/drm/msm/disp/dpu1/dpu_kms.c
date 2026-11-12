@@ -10,6 +10,7 @@
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/dma-buf.h>
 #include <linux/of_irq.h>
 #include <linux/pm_opp.h>
@@ -1102,6 +1103,38 @@ static bool dpu_kms_take_over(struct msm_kms *kms)
 	return true;
 }
 
+/*
+ * The links restart instead of taking the bootloader's stream over: the
+ * stream ends here, at its source, before they let go of their clocks. A
+ * timing engine still feeding a link that changes clock under it kept the
+ * link busy and its commands waiting.
+ */
+static void dpu_kms_end_boot_stream(struct msm_kms *kms)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	bool stopped = false;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dpu_kms->rm.hw_intf); i++) {
+		struct dpu_hw_intf *intf = dpu_kms->rm.hw_intf[i];
+		struct dpu_hw_intf_status status = { 0 };
+
+		if (!intf || intf->cap->type != INTF_DSI || !intf->ops.get_status)
+			continue;
+		intf->ops.get_status(intf, &status);
+		if (!status.is_en)
+			continue;
+		intf->ops.enable_timing(intf, 0);
+		drm_info(dpu_kms->dev, "intf_%d: bootloader's stream stopped at frame %u\n",
+			 intf->idx - INTF_0, status.frame_count);
+		stopped = true;
+	}
+
+	/* Longer than a frame of any mode. */
+	if (stopped)
+		msleep(50);
+}
+
 static const struct msm_kms_funcs kms_funcs = {
 	.hw_init         = dpu_kms_hw_init,
 	.irq_preinstall  = dpu_core_irq_preinstall,
@@ -1119,6 +1152,7 @@ static const struct msm_kms_funcs kms_funcs = {
 	.destroy         = dpu_kms_destroy,
 	.snapshot        = dpu_kms_mdp_snapshot,
 	.take_over       = dpu_kms_take_over,
+	.end_boot_stream = dpu_kms_end_boot_stream,
 #ifdef CONFIG_DEBUG_FS
 	.debugfs_init    = dpu_kms_debugfs_init,
 #endif
