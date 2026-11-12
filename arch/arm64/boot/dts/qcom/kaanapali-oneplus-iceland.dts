@@ -12,11 +12,12 @@
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 /*
- * CPU throttle temperature for kaanapali-cpu-cooling.dtsi: 90 °C, the
- * developer's limit for this fanless tablet, whose cores otherwise ran
- * into the 120 °C hot trip under sustained load.
+ * CPU throttle temperature for kaanapali-cpu-cooling.dtsi: 105 °C, the
+ * stock thermal HAL trip of the cpu-*, cpullc-* and qmx-* zones, which
+ * pauses cores from 112 °C. The SoC is allowed to run hot; the skin
+ * thermistor decides when the tablet slows down (skin-thermal).
  */
-#define KAANAPALI_CPU_PASSIVE_MC 90000
+#define KAANAPALI_CPU_PASSIVE_MC 105000
 #include "kaanapali.dtsi"
 
 #include "pmh0101.dtsi"              /* SPMI0: SID-1       */
@@ -366,6 +367,102 @@
 
 			platform {
 				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
+	board_temp: thermal-sensor-board {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&pmk8850_vadc 0x148>;
+		io-channel-names = "sensor-channel";
+	};
+
+	skin_temp: thermal-sensor-skin {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&pmk8850_vadc 0x144>;
+		io-channel-names = "sensor-channel";
+	};
+
+	xo_temp: thermal-sensor-xo {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&pmk8850_vadc 0x44>;
+		io-channel-names = "sensor-channel";
+	};
+
+	/*
+	 * The tablet throttles on how hot it is, not on how hot the SoC is.
+	 * skin-thermal follows the skin thermistor stock throttles on (its
+	 * sys-therm-2, thermal HAL stages from 48 to 61 °C): from 50 °C it
+	 * steps the CPU clusters and the GPU down, one state a second, and
+	 * lets them back up below 48 °C. xo-thermal keeps stock's kernel
+	 * limits on the XO thermistor beside the SoC: full throttle from
+	 * 78 °C, power off at 90 °C. board-thermal only reports.
+	 */
+	thermal-zones {
+		board-thermal {
+			thermal-sensors = <&board_temp>;
+		};
+
+		skin-thermal {
+			polling-delay-passive = <1000>;
+			polling-delay = <5000>;
+
+			thermal-sensors = <&skin_temp>;
+
+			trips {
+				skin_passive: skin-passive {
+					temperature = <50000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				skin-critical {
+					temperature = <90000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&skin_passive>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
+		};
+
+		xo-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <5000>;
+
+			thermal-sensors = <&xo_temp>;
+
+			trips {
+				xo_passive: xo-passive {
+					temperature = <78000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				xo-critical {
+					temperature = <90000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&xo_passive>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
 			};
 		};
 	};
@@ -1044,54 +1141,6 @@
 	firmware-name = "qcom/kaanapali/iceland/gen80200_zap.mbn";
 };
 
-/*
- * The tablet cools the SoC through its back alone: throttle the GPU from
- * 90 °C instead of the SoC's 105, as the old root did at runtime.
- */
-&gpuss_0_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_1_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_2_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_3_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_4_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_5_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_6_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_7_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_8_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_9_alert0 {
-	temperature = <90000>;
-};
-
-&gpuss_10_alert0 {
-	temperature = <90000>;
-};
-
 &i2c0 {
 	clock-frequency = <400000>;
 
@@ -1630,6 +1679,29 @@
 	pinctrl-names = "default";
 
 	status = "okay";
+
+	/* XO thermistor on PMK8850: SPMI bus 0, SID 0 */
+	channel@44 {
+		reg = <0x44>;
+		label = "xo_therm";
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+	};
+
+	/* Board thermistors on PMH0101: SPMI bus 0, SID 1 */
+	channel@144 {
+		reg = <0x144>;
+		label = "skin_therm";
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+	};
+
+	channel@148 {
+		reg = <0x148>;
+		label = "board_therm";
+		qcom,ratiometric;
+		qcom,hw-settle-time = <200>;
+	};
 
 	/* Charger thermistors on PMIH0108: SPMI bus 1, SID 7 */
 	channel@2744 {
