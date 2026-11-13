@@ -80,6 +80,11 @@ devices/boot holds one tool per boot chain that writes the images:
                 ramdisk. It writes either from the device's own stock
                 image, keeping its header and AVB properties.
 
+  android-v3    Android header version 3: a boot image holding the kernel
+                and ramdisk alongside stock vendor_boot and dtbo. Keeps the
+                template's header and unsigned AVB properties.
+                Usage: TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE] [--tail TAIL].
+
 
   android-legacy  Android header version 1: a gzip kernel followed by the
                   device's vendor DTBs, plus a ramdisk in the same boot

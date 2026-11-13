@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""Writes a boot image for the Android header version 3 boot chain.
+
+The device's own stock boot image is the template: its version 3 header,
+partition size, AVB salt and properties are kept, and only the kernel and
+ramdisk payloads change. The image gets an unsigned AVB hash footer, as the
+stock images have. Needs avbtool and unpack_bootimg.
+
+Usage: devices/boot/android-v3 TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE] [--tail TAIL]
+
+EVIDENCE, when given, is a directory that receives the avbtool
+verification, the unpacked header and the unpacked image.
+
+TAIL, when given, is a filesystem image written right after the ramdisk, at
+the next page. The bootloader loads only what the header lists and never
+reads it; Linux mounts it in place from the partition.
+"""
+import hashlib
+import json
+from pathlib import Path
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+
+PAGE = 4096
+# Version 3 header offsets: kernel size, ramdisk size, header version.
+KERNEL_SIZE, RAMDISK_SIZE, HEADER_VERSION = 8, 12, 40
+
+
+def run(*args):
+    return subprocess.run(list(map(str, args)), check=True, capture_output=True).stdout
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def main():
+    args = sys.argv[1:]
+    tail = b''
+    if '--tail' in args:
+        at = args.index('--tail')
+        tail = Path(args[at + 1]).read_bytes()
+        del args[at:at + 2]
+    if len(args) not in (4, 5):
+        sys.exit(__doc__)
+    assert len(tail) % PAGE == 0, 'tail is not a whole number of pages'
+    template, image_path, ramdisk_path, output = map(Path, args[:4])
+    evidence = Path(args[4]) if len(args) == 5 else None
+    stock = template.read_bytes()
+    image = image_path.read_bytes()
+    ramdisk = ramdisk_path.read_bytes()
+
+    header = bytearray(stock[:PAGE])
+    assert header[:8] == b'ANDROID!', 'template is not an Android boot image'
+    assert struct.unpack_from('<I', header, HEADER_VERSION)[0] == 3, 'template header is not version 3'
+    struct.pack_into('<I', header, KERNEL_SIZE, len(image))
+    struct.pack_into('<I', header, RAMDISK_SIZE, len(ramdisk))
+
+    info = run('avbtool', 'info_image', '--image', template).decode()
+    algorithm = re.search(r'^Algorithm:\s+(\S+)$', info, re.M).group(1)
+    salt = re.search(r'^\s*Salt:\s*([0-9a-f]+)\s*$', info, re.M).group(1)
+    props = re.findall(r"^\s*Prop: (\S+) -> '(.*)'$", info, re.M)
+
+    packed = (bytes(header) + image + b'\0' * (-len(image) % PAGE) +
+              ramdisk + b'\0' * (-len(ramdisk) % PAGE))
+    tail_offset = len(packed)
+    output.write_bytes(packed + tail)
+    run('avbtool', 'add_hash_footer', '--image', output, '--partition_size', len(stock),
+        '--partition_name', 'boot', '--hash_algorithm', 'sha256', '--algorithm', 'NONE',
+        '--salt', salt, *[a for key, value in props for a in ('--prop', f'{key}:{value}')])
+    result = output.read_bytes()
+    assert len(result) == len(stock) and result[:PAGE] == header
+    assert result[tail_offset:tail_offset + len(tail)] == tail, 'tail is not after the ramdisk'
+
+    with tempfile.TemporaryDirectory() as scratch:
+        named = Path(scratch) / 'boot.img'
+        named.symlink_to(output.resolve())
+        verification = run('avbtool', 'verify_image', '--image', named)
+        unpacked = Path(evidence or scratch) / 'boot-unpacked'
+        described = run('unpack_bootimg', '--boot_img', output, '--out', unpacked)
+        assert (unpacked / 'kernel').read_bytes() == image, 'unpacked kernel differs'
+        assert (unpacked / 'ramdisk').read_bytes() == ramdisk, 'unpacked ramdisk differs'
+    if evidence:
+        (evidence / 'boot-verification.txt').write_bytes(verification)
+        (evidence / 'boot-header.txt').write_bytes(described)
+    print(json.dumps({'bytes': len(result), 'sha256': sha256(result),
+                      'template_sha256': sha256(stock), 'template_algorithm': algorithm}))
+
+
+if __name__ == '__main__':
+    main()
