@@ -171,6 +171,7 @@ struct goodix_berlin_core {
 	struct goodix_berlin_fw_version fw_version;
 	struct input_dev *input_dev;
 	int irq;
+	bool ignore_touch_major;
 
 	/* Runtime parameters extracted from IC_INFO buffer  */
 	u32 touch_data_addr;
@@ -463,8 +464,9 @@ static void goodix_berlin_report_state(struct goodix_berlin_core *cd, int n)
 		touchscreen_report_pos(cd->input_dev, &cd->props,
 				       __le16_to_cpu(t->x), __le16_to_cpu(t->y),
 				       true);
-		input_report_abs(cd->input_dev, ABS_MT_TOUCH_MAJOR,
-				 __le16_to_cpu(t->w));
+		if (!cd->ignore_touch_major)
+			input_report_abs(cd->input_dev, ABS_MT_TOUCH_MAJOR,
+					 __le16_to_cpu(t->w));
 	}
 
 	input_mt_sync_frame(cd->input_dev);
@@ -624,7 +626,9 @@ static int goodix_berlin_input_dev_config(struct goodix_berlin_core *cd,
 			     0, SZ_64K - 1, 0, 0);
 	input_set_abs_params(cd->input_dev, ABS_MT_POSITION_Y,
 			     0, SZ_64K - 1, 0, 0);
-	input_set_abs_params(cd->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
+	if (!cd->ignore_touch_major)
+		input_set_abs_params(cd->input_dev, ABS_MT_TOUCH_MAJOR,
+				     0, 255, 0, 0);
 
 	touchscreen_parse_properties(cd->input_dev, true, &cd->props);
 
@@ -745,6 +749,8 @@ int goodix_berlin_probe(struct device *dev, int irq, const struct input_id *id,
 	cd->regmap = regmap;
 	cd->irq = irq;
 	cd->ic_data = ic_data;
+	cd->ignore_touch_major =
+		device_property_read_bool(dev, "goodix,ignore-touch-major");
 
 	cd->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(cd->reset_gpio))
