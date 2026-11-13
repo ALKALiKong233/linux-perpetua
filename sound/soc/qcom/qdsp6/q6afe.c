@@ -395,6 +395,7 @@ struct q6afe {
 	struct aprv2_ibasic_rsp_result_t result;
 	wait_queue_head_t wait;
 	struct list_head port_list;
+	u32 lpass_core_hw_client_handle;
 	spinlock_t port_list_lock;
 };
 
@@ -662,6 +663,10 @@ struct q6afe_port {
 struct afe_cmd_remote_lpass_core_hw_vote_request {
 	uint32_t  hw_block_id;
 	char client_name[8];
+} __packed;
+
+struct afe_cmd_rsp_remote_lpass_core_hw_vote_request {
+	u32 client_handle;
 } __packed;
 
 struct afe_cmd_remote_lpass_core_hw_devote_request {
@@ -1036,17 +1041,29 @@ static int q6afe_callback(struct apr_device *adev, const struct apr_resp_pkt *da
 				wake_up(&afe->wait);
 			}
 			break;
+		case AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST:
+			afe->result = *res;
+			wake_up(&afe->wait);
+			break;
 		default:
 			dev_err(afe->dev, "Unknown cmd 0x%x\n",	res->opcode);
 			break;
 		}
 	}
 		break;
-	case AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST:
+	case AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST: {
+		const struct afe_cmd_rsp_remote_lpass_core_hw_vote_request *rsp;
+
+		if (data->payload_size < sizeof(*rsp))
+			return -EINVAL;
+
+		rsp = data->payload;
+		afe->lpass_core_hw_client_handle = rsp->client_handle;
 		afe->result.opcode = hdr->opcode;
-		afe->result.status = res->status;
+		afe->result.status = 0;
 		wake_up(&afe->wait);
 		break;
+	}
 	default:
 		break;
 	}
@@ -1404,6 +1421,9 @@ void q6afe_tdm_port_prepare(struct q6afe_port *port,
 	pcfg->tdm_cfg.sync_mode = cfg->sync_mode;
 	pcfg->tdm_cfg.sync_src = cfg->sync_src;
 	pcfg->tdm_cfg.nslots_per_frame = cfg->nslots_per_frame;
+	pcfg->tdm_cfg.ctrl_data_out_enable = cfg->data_out_enable;
+	pcfg->tdm_cfg.ctrl_invert_sync_pulse = cfg->invert_sync;
+	pcfg->tdm_cfg.ctrl_sync_data_delay = cfg->data_delay;
 
 	pcfg->tdm_cfg.slot_width = cfg->slot_width;
 	pcfg->tdm_cfg.slot_mask = cfg->slot_mask;
@@ -1891,11 +1911,15 @@ EXPORT_SYMBOL_GPL(q6afe_port_put);
 int q6afe_unvote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 			       uint32_t client_handle)
 {
-	struct q6afe *afe = dev_get_drvdata(dev->parent);
+	struct q6afe *afe;
 	struct afe_cmd_remote_lpass_core_hw_devote_request *vote_cfg;
 	struct apr_pkt *pkt;
 	int ret = 0;
 	int pkt_size = APR_HDR_SIZE + sizeof(*vote_cfg);
+
+	if (!dev || !dev->parent || !client_handle)
+		return -EINVAL;
+	afe = dev_get_drvdata(dev->parent);
 
 	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
 	if (!p)
@@ -1915,8 +1939,9 @@ int q6afe_unvote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 	vote_cfg->hw_block_id = hw_block_id;
 	vote_cfg->client_handle = client_handle;
 
-	ret = apr_send_pkt(afe->apr, pkt);
-	if (ret < 0)
+	ret = afe_apr_send_pkt(afe, pkt, NULL,
+			       AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST);
+	if (ret)
 		dev_err(afe->dev, "AFE failed to unvote (%d)\n", hw_block_id);
 
 	return ret;
@@ -1926,11 +1951,15 @@ EXPORT_SYMBOL(q6afe_unvote_lpass_core_hw);
 int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 			     const char *client_name, uint32_t *client_handle)
 {
-	struct q6afe *afe = dev_get_drvdata(dev->parent);
+	struct q6afe *afe;
 	struct afe_cmd_remote_lpass_core_hw_vote_request *vote_cfg;
 	struct apr_pkt *pkt;
 	int ret = 0;
 	int pkt_size = APR_HDR_SIZE + sizeof(*vote_cfg);
+
+	if (!dev || !dev->parent || !client_name || !client_handle)
+		return -EINVAL;
+	afe = dev_get_drvdata(dev->parent);
 
 	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
 	if (!p)
@@ -1951,10 +1980,18 @@ int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 	strscpy(vote_cfg->client_name, client_name,
 			sizeof(vote_cfg->client_name));
 
+	afe->lpass_core_hw_client_handle = 0;
 	ret = afe_apr_send_pkt(afe, pkt, NULL,
 			       AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST);
-	if (ret)
+	if (ret) {
 		dev_err(afe->dev, "AFE failed to vote (%d)\n", hw_block_id);
+	} else if (!afe->lpass_core_hw_client_handle) {
+		dev_err(afe->dev, "AFE returned an invalid vote handle (%d)\n",
+			hw_block_id);
+		ret = -EINVAL;
+	} else {
+		*client_handle = afe->lpass_core_hw_client_handle;
+	}
 
 	return ret;
 }
