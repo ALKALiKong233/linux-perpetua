@@ -1410,8 +1410,33 @@ void xhci_hc_died(struct xhci_hcd *xhci)
 	}
 
 	/* inform usb core hc died if PCI remove isn't already handling it */
-	if (notify)
+	if (notify) {
 		usb_hc_died(xhci_to_hcd(xhci));
+		if (xhci->plat_hc_died)
+			xhci->plat_hc_died(xhci_to_hcd(xhci));
+	}
+}
+
+static void xhci_report_repeated_transaction_error(struct xhci_hcd *xhci)
+{
+	/*
+	 * A few transaction errors can be caused by an individual device and
+	 * are not evidence that the host controller needs to be reset. Some
+	 * platforms can, however, lose the complete downstream bus during a
+	 * Type-C Power Delivery transition while the xHC itself stays alive.
+	 * Let an opted-in platform recover after a concentrated error burst.
+	 */
+	if (!xhci->plat_hc_error)
+		return;
+
+	if (!xhci->plat_error_window_start ||
+	    time_after(jiffies, xhci->plat_error_window_start + 2 * HZ)) {
+		xhci->plat_error_window_start = jiffies;
+		xhci->plat_error_count = 0;
+	}
+
+	if (++xhci->plat_error_count == 16)
+		xhci->plat_hc_error(xhci_to_hcd(xhci));
 }
 
 /*
@@ -2711,11 +2736,13 @@ static int handle_tx_event(struct xhci_hcd *xhci,
 		xhci_dbg(xhci, "Split transaction error for slot %u ep %u\n",
 			 slot_id, ep_index);
 		status = -EPROTO;
+		xhci_report_repeated_transaction_error(xhci);
 		break;
 	case COMP_USB_TRANSACTION_ERROR:
 		xhci_dbg(xhci, "Transfer error for slot %u ep %u on endpoint\n",
 			 slot_id, ep_index);
 		status = -EPROTO;
+		xhci_report_repeated_transaction_error(xhci);
 		break;
 	case COMP_BABBLE_DETECTED_ERROR:
 		xhci_dbg(xhci, "Babble error for slot %u ep %u on endpoint\n",

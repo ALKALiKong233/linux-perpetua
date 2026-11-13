@@ -612,9 +612,56 @@ static void dwc3_qcom_run_stop_notifier(struct dwc3 *dwc, bool is_on)
 	pm_runtime_mark_last_busy(qcom->dev);
 }
 
+static int dwc3_qcom_recover_host(struct dwc3 *dwc)
+{
+	struct dwc3_qcom *qcom = to_dwc3_qcom(dwc);
+	int ret;
+
+	/*
+	 * A Type-C Power Delivery transition can leave both the DWC3 core and
+	 * the HS PHY out of sync. Reinitializing only the xHCI child causes the
+	 * attached high-speed hub to be repeatedly detected as full-speed.
+	 */
+	dwc3_core_exit(dwc);
+
+	ret = reset_control_assert(qcom->resets);
+	if (ret)
+		return ret;
+
+	usleep_range(10, 1000);
+
+	ret = reset_control_deassert(qcom->resets);
+	if (ret)
+		return ret;
+
+	if (device_property_read_bool(qcom->dev,
+				      "qcom,select-utmi-as-pipe-clk"))
+		dwc3_qcom_select_utmi_clk(qcom);
+
+	ret = dwc3_core_init(dwc);
+	if (ret)
+		return ret;
+
+	/*
+	 * The wrapper reset clears QSCRATCH VBUS/session-valid overrides, but
+	 * it does not reset the software role cached by the glue driver. Keep
+	 * both sides explicitly synchronized with the Host role being recovered.
+	 */
+	guard(mutex)(&qcom->role_lock);
+	dwc3_qcom_vbus_override_enable(qcom, false);
+	WRITE_ONCE(qcom->current_role, USB_ROLE_HOST);
+	if (qcom->device_pm_held) {
+		pm_runtime_put_noidle(qcom->dev);
+		qcom->device_pm_held = false;
+	}
+
+	return 0;
+}
+
 static struct dwc3_glue_ops dwc3_qcom_glue_ops = {
 	.pre_set_role	= dwc3_qcom_set_role_notifier,
 	.pre_run_stop	= dwc3_qcom_run_stop_notifier,
+	.recover_host	= dwc3_qcom_recover_host,
 };
 
 static int dwc3_qcom_probe(struct platform_device *pdev)

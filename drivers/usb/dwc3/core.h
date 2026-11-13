@@ -1002,10 +1002,12 @@ struct dwc3_scratchpad_array {
  *				need to be passed on to glue layer
  * @pre_set_role: Notify glue of role switch notifications
  * @pre_run_stop: Notify run stop enable/disable information to glue
+ * @recover_host: Reinitialize platform resources after the host controller dies
  */
 struct dwc3_glue_ops {
 	void	(*pre_set_role)(struct dwc3 *dwc, enum usb_role role);
 	void	(*pre_run_stop)(struct dwc3 *dwc, bool is_on);
+	int	(*recover_host)(struct dwc3 *dwc);
 };
 
 /**
@@ -1202,6 +1204,9 @@ struct dwc3_glue_ops {
 struct dwc3 {
 	struct work_struct	drd_work;
 	struct work_struct	err_recovery_work;
+	struct delayed_work	host_recovery_work;
+	unsigned long		host_recovery_last;
+	unsigned int		host_recovery_attempts;
 	struct dwc3_trb		*ep0_trb;
 	void			*bounce;
 	u8			*setup_buf;
@@ -1439,6 +1444,7 @@ struct dwc3 {
 	unsigned		wakeup_configured:1;
 	unsigned		suspended:1;
 	unsigned		susphy_state:1;
+	unsigned		recover_host_on_hc_died:1;
 
 	u16			imod_interval;
 
@@ -1454,6 +1460,8 @@ struct dwc3 {
 #define INCRX_UNDEF_LENGTH_BURST_MODE 1
 
 #define work_to_dwc(w)		(container_of((w), struct dwc3, drd_work))
+#define recovery_work_to_dwc(w)	(container_of(to_delayed_work(w), struct dwc3, \
+					      host_recovery_work))
 
 /* -------------------------------------------------------------------------- */
 
@@ -1677,10 +1685,16 @@ static inline void dwc3_pre_run_stop(struct dwc3 *dwc, bool is_on)
 #if IS_ENABLED(CONFIG_USB_DWC3_HOST) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_host_init(struct dwc3 *dwc);
 void dwc3_host_exit(struct dwc3 *dwc);
+void dwc3_host_recovery_init(struct dwc3 *dwc);
+void dwc3_host_recovery_cancel(struct dwc3 *dwc);
 #else
 static inline int dwc3_host_init(struct dwc3 *dwc)
 { return 0; }
 static inline void dwc3_host_exit(struct dwc3 *dwc)
+{ }
+static inline void dwc3_host_recovery_init(struct dwc3 *dwc)
+{ }
+static inline void dwc3_host_recovery_cancel(struct dwc3 *dwc)
 { }
 #endif
 

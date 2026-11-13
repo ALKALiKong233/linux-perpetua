@@ -18,6 +18,8 @@ struct xhci_plat_priv {
 	bool power_lost;
 	unsigned sideband_at_suspend:1;
 	void (*plat_start)(struct usb_hcd *);
+	void (*plat_hc_died)(struct usb_hcd *);
+	void (*plat_hc_error)(struct usb_hcd *);
 	int (*init_quirk)(struct usb_hcd *);
 	int (*suspend_quirk)(struct usb_hcd *);
 	int (*resume_quirk)(struct usb_hcd *);

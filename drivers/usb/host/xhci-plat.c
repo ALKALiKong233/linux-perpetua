@@ -244,6 +244,8 @@ int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev, const s
 		priv = hcd_to_xhci_priv(hcd);
 		/* Just copy data for now */
 		*priv = *priv_match;
+		xhci->plat_hc_died = priv->plat_hc_died;
+		xhci->plat_hc_error = priv->plat_hc_error;
 	}
 
 	device_set_wakeup_capable(&pdev->dev, true);

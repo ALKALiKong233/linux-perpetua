@@ -1873,6 +1873,8 @@ static void dwc3_get_properties(struct dwc3 *dwc)
 
 	dwc->dis_split_quirk = device_property_read_bool(dev,
 				"snps,dis-split-quirk");
+	dwc->recover_host_on_hc_died = device_property_read_bool(dev,
+				"snps,recover-on-hc-died");
 
 	dwc->lpm_nyet_threshold = lpm_nyet_threshold;
 	dwc->tx_de_emphasis = tx_de_emphasis;
@@ -2373,6 +2375,7 @@ int dwc3_core_probe(const struct dwc3_probe_data *data)
 	}
 
 	mutex_init(&dwc->mutex);
+	dwc3_host_recovery_init(dwc);
 
 	pm_runtime_get_noresume(dev);
 	pm_runtime_set_active(dev);
@@ -2478,6 +2481,7 @@ void dwc3_core_remove(struct dwc3 *dwc)
 {
 	pm_runtime_get_sync(dwc->dev);
 
+	dwc3_host_recovery_cancel(dwc);
 	dwc3_core_exit_mode(dwc);
 	dwc3_debugfs_exit(dwc);
 

@@ -8,6 +8,7 @@
  */
 
 #include <linux/irq.h>
+#include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/usb.h>
@@ -19,6 +20,7 @@
 #include "../host/xhci-caps.h"
 #include "../host/xhci-plat.h"
 #include "core.h"
+#include "io.h"
 
 #define XHCI_HCSPARAMS1		0x4
 #define XHCI_PORTSC_BASE	0x400
@@ -78,9 +80,114 @@ static void dwc3_xhci_plat_start(struct usb_hcd *hcd)
 	dwc3_enable_susphy(dwc, true);
 }
 
+static void dwc3_host_recovery_work(struct work_struct *work)
+{
+	struct dwc3 *dwc = recovery_work_to_dwc(work);
+	unsigned long flags;
+	u32 reg;
+	int ret;
+	int i;
+
+	mutex_lock(&dwc->mutex);
+
+	spin_lock_irqsave(&dwc->lock, flags);
+	if (dwc->current_dr_role != DWC3_GCTL_PRTCAP_HOST ||
+	    dwc->desired_dr_role != DWC3_GCTL_PRTCAP_HOST) {
+		spin_unlock_irqrestore(&dwc->lock, flags);
+		goto out_unlock;
+	}
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	if (!dwc->host_recovery_last ||
+	    time_after(jiffies, dwc->host_recovery_last + 60 * HZ))
+		dwc->host_recovery_attempts = 0;
+
+	if (dwc->host_recovery_attempts >= 3) {
+		dev_err(dwc->dev,
+			"host recovery limit reached; waiting for a new connection\n");
+		goto out_unlock;
+	}
+
+	dwc->host_recovery_attempts++;
+	dwc->host_recovery_last = jiffies;
+
+	ret = pm_runtime_resume_and_get(dwc->dev);
+	if (ret < 0) {
+		dev_err(dwc->dev, "failed to resume for host recovery: %d\n", ret);
+		goto out_unlock;
+	}
+
+	dev_warn(dwc->dev, "recovering unresponsive xHCI host controller\n");
+	dwc3_host_exit(dwc);
+
+	if (dwc->glue_ops && dwc->glue_ops->recover_host) {
+		ret = dwc->glue_ops->recover_host(dwc);
+		if (ret) {
+			dev_err(dwc->dev,
+				"platform host recovery failed: %d\n", ret);
+			goto out_pm;
+		}
+	} else {
+		/* Recreate the xHCI child after resetting the shared DWC3 core. */
+		reg = dwc3_readl(dwc, DWC3_GCTL);
+		reg |= DWC3_GCTL_CORESOFTRESET;
+		dwc3_writel(dwc, DWC3_GCTL, reg);
+		msleep(100);
+		reg = dwc3_readl(dwc, DWC3_GCTL);
+		reg &= ~DWC3_GCTL_CORESOFTRESET;
+		dwc3_writel(dwc, DWC3_GCTL, reg);
+	}
+
+	spin_lock_irqsave(&dwc->lock, flags);
+	dwc3_set_prtcap(dwc, DWC3_GCTL_PRTCAP_HOST, false);
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	for (i = 0; i < dwc->num_usb2_ports; i++)
+		phy_set_mode(dwc->usb2_generic_phy[i], PHY_MODE_USB_HOST);
+	for (i = 0; i < dwc->num_usb3_ports; i++)
+		phy_set_mode(dwc->usb3_generic_phy[i], PHY_MODE_USB_HOST);
+
+	ret = dwc3_host_init(dwc);
+	if (ret)
+		dev_err(dwc->dev, "failed to recover host controller: %d\n", ret);
+	else
+		dev_info(dwc->dev, "xHCI host controller recovered\n");
+
+out_pm:
+	pm_runtime_mark_last_busy(dwc->dev);
+	pm_runtime_put_autosuspend(dwc->dev);
+
+out_unlock:
+	mutex_unlock(&dwc->mutex);
+}
+
+static void dwc3_xhci_plat_hc_died(struct usb_hcd *hcd)
+{
+	struct platform_device *pdev = to_platform_device(hcd->self.controller);
+	struct dwc3 *dwc = dev_get_drvdata(pdev->dev.parent);
+
+	if (!dwc || !dwc->recover_host_on_hc_died)
+		return;
+
+	mod_delayed_work(system_long_wq, &dwc->host_recovery_work,
+			 msecs_to_jiffies(250));
+}
+
 static const struct xhci_plat_priv dwc3_xhci_plat_quirk = {
 	.plat_start = dwc3_xhci_plat_start,
+	.plat_hc_died = dwc3_xhci_plat_hc_died,
+	.plat_hc_error = dwc3_xhci_plat_hc_died,
 };
+
+void dwc3_host_recovery_init(struct dwc3 *dwc)
+{
+	INIT_DELAYED_WORK(&dwc->host_recovery_work, dwc3_host_recovery_work);
+}
+
+void dwc3_host_recovery_cancel(struct dwc3 *dwc)
+{
+	cancel_delayed_work_sync(&dwc->host_recovery_work);
+}
 
 static void dwc3_host_fill_xhci_irq_res(struct dwc3 *dwc,
 					int irq, char *name)
