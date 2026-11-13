@@ -4,6 +4,7 @@
 #include <dt-bindings/sound/qcom,q6afe.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pinctrl/consumer.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
 #include <sound/pcm.h>
@@ -17,6 +18,9 @@
 #include "sdw.h"
 
 #define MI2S_BCLK_RATE		1536000
+#define PRI_TDM_BCLK_RATE	6144000
+#define PRI_TDM_SLOTS		4
+#define PRI_TDM_SLOT_WIDTH	32
 
 struct sm8250_snd_data {
 	bool stream_prepared[AFE_PORT_MAX];
@@ -25,6 +29,11 @@ struct sm8250_snd_data {
 	struct snd_soc_jack usb_offload_jack;
 	bool usb_offload_jack_setup;
 	struct snd_soc_jack dp_jack;
+	struct pinctrl *pri_tdm_pinctrl;
+	struct pinctrl_state *pri_tdm_active;
+	struct pinctrl_state *pri_tdm_sleep;
+	struct mutex pri_tdm_lock;
+	unsigned int pri_tdm_users;
 	bool jack_setup;
 };
 
@@ -71,6 +80,92 @@ static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	return 0;
 }
 
+static bool sm8250_is_pri_tdm(unsigned int id)
+{
+	return id == PRIMARY_TDM_RX_0 || id == PRIMARY_TDM_TX_0;
+}
+
+static int sm8250_pri_tdm_get(struct sm8250_snd_data *data)
+{
+	int ret = 0;
+
+	if (!data->pri_tdm_pinctrl)
+		return 0;
+
+	mutex_lock(&data->pri_tdm_lock);
+	if (!data->pri_tdm_users) {
+		ret = pinctrl_select_state(data->pri_tdm_pinctrl,
+					   data->pri_tdm_active);
+		if (ret)
+			goto out;
+	}
+	data->pri_tdm_users++;
+out:
+	mutex_unlock(&data->pri_tdm_lock);
+	return ret;
+}
+
+static void sm8250_pri_tdm_put(struct sm8250_snd_data *data)
+{
+	int ret;
+
+	if (!data->pri_tdm_pinctrl)
+		return;
+
+	mutex_lock(&data->pri_tdm_lock);
+	if (WARN_ON(!data->pri_tdm_users))
+		goto out;
+
+	if (!--data->pri_tdm_users) {
+		ret = pinctrl_select_state(data->pri_tdm_pinctrl,
+					   data->pri_tdm_sleep);
+		if (ret)
+			dev_err(data->card->dev,
+				"failed to select primary TDM sleep state: %d\n",
+				ret);
+	}
+out:
+	mutex_unlock(&data->pri_tdm_lock);
+}
+
+static int sm8250_snd_hw_params(struct snd_pcm_substream *substream,
+				struct snd_pcm_hw_params *params)
+{
+	static const unsigned int rx_slots[] = { 0, 4 };
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	int ret;
+
+	if (cpu_dai->id != PRIMARY_TDM_RX_0)
+		return 0;
+
+	ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0,
+				       GENMASK(ARRAY_SIZE(rx_slots) - 1, 0),
+				       PRI_TDM_SLOTS, PRI_TDM_SLOT_WIDTH);
+	if (ret)
+		return ret;
+
+	ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL,
+					  ARRAY_SIZE(rx_slots), rx_slots);
+	if (ret)
+		return ret;
+
+	return snd_soc_dai_set_sysclk(cpu_dai,
+				     Q6AFE_LPASS_CLK_ID_PRI_TDM_IBIT,
+				     PRI_TDM_BCLK_RATE, SND_SOC_CLOCK_OUT);
+}
+
+static void sm8250_snd_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct sm8250_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
+
+	qcom_snd_sdw_shutdown(substream);
+	if (sm8250_is_pri_tdm(cpu_dai->id))
+		sm8250_pri_tdm_put(data);
+}
+
 static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 {
 	unsigned int fmt = SND_SOC_DAIFMT_BP_FP;
@@ -78,6 +173,8 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
+	struct sm8250_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
+	int ret;
 
 	switch (cpu_dai->id) {
 	case PRIMARY_MI2S_RX:
@@ -132,7 +229,17 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 		break;
 	}
 
-	return qcom_snd_sdw_startup(substream);
+	if (sm8250_is_pri_tdm(cpu_dai->id)) {
+		ret = sm8250_pri_tdm_get(data);
+		if (ret)
+			return ret;
+	}
+
+	ret = qcom_snd_sdw_startup(substream);
+	if (ret && sm8250_is_pri_tdm(cpu_dai->id))
+		sm8250_pri_tdm_put(data);
+
+	return ret;
 }
 
 static int sm8250_snd_prepare(struct snd_pcm_substream *substream)
@@ -155,7 +262,8 @@ static int sm8250_snd_hw_free(struct snd_pcm_substream *substream)
 
 static const struct snd_soc_ops sm8250_be_ops = {
 	.startup = sm8250_snd_startup,
-	.shutdown = qcom_snd_sdw_shutdown,
+	.shutdown = sm8250_snd_shutdown,
+	.hw_params = sm8250_snd_hw_params,
 	.hw_free = sm8250_snd_hw_free,
 	.prepare = sm8250_snd_prepare,
 };
@@ -195,6 +303,32 @@ static int sm8250_platform_probe(struct platform_device *pdev)
 	card->dev = dev;
 	dev_set_drvdata(dev, card);
 	snd_soc_card_set_drvdata(card, data);
+	data->card = card;
+	mutex_init(&data->pri_tdm_lock);
+	if (of_device_is_compatible(dev->of_node, "xiaomi,lisa-sndcard")) {
+		data->pri_tdm_pinctrl = devm_pinctrl_get(dev);
+		if (IS_ERR(data->pri_tdm_pinctrl))
+			return dev_err_probe(dev, PTR_ERR(data->pri_tdm_pinctrl),
+					     "failed to get primary TDM pinctrl\n");
+
+		data->pri_tdm_active =
+			pinctrl_lookup_state(data->pri_tdm_pinctrl, "pri-tdm-active");
+		if (IS_ERR(data->pri_tdm_active))
+			return dev_err_probe(dev, PTR_ERR(data->pri_tdm_active),
+					     "failed to get primary TDM active state\n");
+
+		data->pri_tdm_sleep =
+			pinctrl_lookup_state(data->pri_tdm_pinctrl, "pri-tdm-sleep");
+		if (IS_ERR(data->pri_tdm_sleep))
+			return dev_err_probe(dev, PTR_ERR(data->pri_tdm_sleep),
+					     "failed to get primary TDM sleep state\n");
+
+		ret = pinctrl_select_state(data->pri_tdm_pinctrl,
+					   data->pri_tdm_sleep);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to select primary TDM sleep state\n");
+	}
 	ret = qcom_snd_parse_of(card);
 	if (ret)
 		return ret;
@@ -206,6 +340,7 @@ static int sm8250_platform_probe(struct platform_device *pdev)
 
 static const struct of_device_id snd_sm8250_dt_match[] = {
 	{ .compatible = "fairphone,fp4-sndcard", .data = "sm7225" },
+	{ .compatible = "xiaomi,lisa-sndcard", .data = "sm7325" },
 	{ .compatible = "fairphone,fp5-sndcard", .data = "qcm6490" },
 	{ .compatible = "qcom,qrb2210-sndcard", .data = "qcm2290" },
 	{ .compatible = "qcom,qrb4210-rb2-sndcard", .data = "sm4250" },
