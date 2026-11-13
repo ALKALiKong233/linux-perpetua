@@ -1166,6 +1166,14 @@
 		};
 	};
 
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
 	wcd-capture-dai-link {
 		link-name = "WCD Capture";
 
