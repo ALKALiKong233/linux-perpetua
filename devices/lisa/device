@@ -1,0 +1,5 @@
+# Xiaomi 11 Lite 5G NE (lisa)
+name='Xiaomi 11 Lite 5G NE'
+vendor=qcom
+soc=sm7325
+boot=android-v3
