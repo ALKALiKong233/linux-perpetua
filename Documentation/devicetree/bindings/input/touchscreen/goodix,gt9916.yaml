@@ -38,11 +38,20 @@ properties:
     description: power supply regulator on VDDIO pin
 
   spi-max-frequency: true
+  touchscreen-min-x: true
+  touchscreen-min-y: true
   touchscreen-inverted-x: true
   touchscreen-inverted-y: true
   touchscreen-size-x: true
   touchscreen-size-y: true
   touchscreen-swapped-x-y: true
+
+  goodix,ignore-touch-major:
+    description:
+      Do not expose or report ABS_MT_TOUCH_MAJOR when the controller firmware
+      uses the width word for vendor-specific packed data rather than a touch
+      diameter.
+    type: boolean
 
 additionalProperties: false
 
