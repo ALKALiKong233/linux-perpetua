@@ -207,6 +207,15 @@ properties:
       avoid -EPROTO errors with usbhid on some devices (Hikey 970).
     type: boolean
 
+  snps,recover-on-hc-died:
+    description:
+      Reinitialize the DWC3 host controller when xHCI reports that the host
+      controller has stopped responding or encounters a concentrated burst
+      of transaction errors. This is needed on systems where a Type-C or USB
+      Power Delivery transition can leave the DWC3 host block and PHY out of
+      sync while the xHCI root buses still appear alive.
+    type: boolean
+
   snps,gfladj-refclk-lpm-sel-quirk:
     description:
       When set, run the SOF/ITP counter based on ref_clk.
