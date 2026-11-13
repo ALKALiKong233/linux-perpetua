@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/panel/xiaomi,lisa-k9d-vtdr6130.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Xiaomi Lisa K9D VTDR6130 AMOLED DSI panel
+
+maintainers:
+  - Oleksii Onchul <oleksiionchul@gmail.com>
+
+allOf:
+  - $ref: panel-common.yaml#
+
+properties:
+  compatible:
+    const: xiaomi,lisa-k9d-vtdr6130
+
+  reg:
+    maxItems: 1
+
+  vddio-supply: true
+  vci-supply: true
+  dvdd-supply: true
+  reset-gpios: true
+  port: true
+
+required:
+  - compatible
+  - reg
+  - vddio-supply
+  - vci-supply
+  - dvdd-supply
+  - reset-gpios
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    dsi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        panel@0 {
+            compatible = "xiaomi,lisa-k9d-vtdr6130";
+            reg = <0>;
+
+            reset-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
+            vddio-supply = <&vreg_l12c_1p8>;
+            vci-supply = <&vreg_l13c_3p0>;
+            dvdd-supply = <&display_panel_dvdd>;
+
+            port {
+                panel_in: endpoint {
+                    remote-endpoint = <&dsi0_out>;
+                };
+            };
+        };
+    };
+...
